@@ -101,6 +101,7 @@ pub async fn handle_secret_command(
                 key_version: 1,
                 created_at: now,
                 rotated_at: now,
+                rotation_due: None,
             };
 
             store
@@ -171,6 +172,7 @@ pub async fn handle_secret_command(
                 key_version,
                 created_at,
                 rotated_at: now,
+                rotation_due: None,
             };
 
             store

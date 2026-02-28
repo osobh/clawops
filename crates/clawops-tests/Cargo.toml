@@ -15,6 +15,7 @@ claw-proto    = { path = "../claw-proto" }
 claw-health   = { path = "../claw-health" }
 claw-metrics  = { path = "../claw-metrics" }
 claw-provision = { path = "../claw-provision" }
+claw-auth     = { path = "../claw-auth" }
 serde_json     = "1.0"
 chrono         = { version = "0.4", features = ["serde"] }
 

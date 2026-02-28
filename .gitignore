@@ -76,3 +76,12 @@ tmp/
 temp/
 .tmp/
 *.bak
+
+# Criterion benchmark output
+criterion/
+target/criterion/
+
+# State files (generated at runtime by clawnode)
+**/state/*.json
+**/state/
+var/lib/clawnode/

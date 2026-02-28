@@ -15,6 +15,65 @@ use std::collections::HashMap;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+// ─── Retry Policy ─────────────────────────────────────────────────────────────
+
+/// Exponential-backoff retry configuration for provider API calls.
+///
+/// # Example
+/// ```rust
+/// # use claw_provision::RetryPolicy;
+/// let policy = RetryPolicy::default(); // 3 retries, 500ms base, 30s max
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryPolicy {
+    /// Maximum number of retry attempts (not counting the initial attempt).
+    pub max_retries: u32,
+    /// Base delay in milliseconds for the first retry.
+    pub base_delay_ms: u64,
+    /// Maximum delay in milliseconds (caps exponential growth).
+    pub max_delay_ms: u64,
+    /// Whether to apply ±25% random jitter to avoid thundering-herd.
+    pub jitter: bool,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            base_delay_ms: 500,
+            max_delay_ms: 30_000,
+            jitter: true,
+        }
+    }
+}
+
+impl RetryPolicy {
+    /// Calculate the delay for attempt `n` (0-indexed, 0 = first retry).
+    ///
+    /// Uses exponential backoff: `min(base * 2^n, max)` with optional jitter.
+    pub fn delay_for_attempt(&self, n: u32) -> std::time::Duration {
+        let exp = self.base_delay_ms.saturating_mul(1u64 << n.min(10));
+        let capped = exp.min(self.max_delay_ms);
+        let ms = if self.jitter {
+            // ±25% jitter using a deterministic but varied offset
+            let jitter_range = capped / 4;
+            // Use attempt number as a simple jitter seed
+            let jitter_offset = (n as u64 * 7 + 13) % (jitter_range.max(1) * 2);
+            capped
+                .saturating_sub(jitter_range)
+                .saturating_add(jitter_offset)
+        } else {
+            capped
+        };
+        std::time::Duration::from_millis(ms)
+    }
+
+    /// Returns `true` if attempt `n` (0-indexed) is within the retry budget.
+    pub fn should_retry(&self, n: u32) -> bool {
+        n < self.max_retries
+    }
+}
+
 // ─── Provider trait ───────────────────────────────────────────────────────────
 
 /// All provider implementations must implement this trait.
@@ -1311,6 +1370,57 @@ impl Provider for DigitalOceanProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_retry_policy_default() {
+        let p = RetryPolicy::default();
+        assert_eq!(p.max_retries, 3);
+        assert_eq!(p.base_delay_ms, 500);
+        assert_eq!(p.max_delay_ms, 30_000);
+        assert!(p.jitter);
+    }
+
+    #[test]
+    fn test_retry_policy_should_retry() {
+        let p = RetryPolicy::default();
+        assert!(p.should_retry(0));
+        assert!(p.should_retry(1));
+        assert!(p.should_retry(2));
+        assert!(!p.should_retry(3), "attempt 3 is beyond max_retries=3");
+    }
+
+    #[test]
+    fn test_retry_policy_delay_grows() {
+        let p = RetryPolicy {
+            max_retries: 3,
+            base_delay_ms: 500,
+            max_delay_ms: 30_000,
+            jitter: false, // no jitter for deterministic test
+        };
+        let d0 = p.delay_for_attempt(0).as_millis();
+        let d1 = p.delay_for_attempt(1).as_millis();
+        let d2 = p.delay_for_attempt(2).as_millis();
+        assert!(d1 > d0, "delay should grow with each attempt");
+        assert!(d2 > d1, "delay should grow with each attempt");
+    }
+
+    #[test]
+    fn test_retry_policy_delay_capped() {
+        let p = RetryPolicy {
+            max_retries: 3,
+            base_delay_ms: 500,
+            max_delay_ms: 1_000,
+            jitter: false,
+        };
+        // After many attempts, delay must not exceed max
+        for n in 0..20 {
+            let d = p.delay_for_attempt(n).as_millis();
+            assert!(
+                d <= p.max_delay_ms as u128,
+                "delay must not exceed max_delay_ms at attempt {n}"
+            );
+        }
+    }
 
     #[test]
     fn test_tier_spec_monthly_cost() {

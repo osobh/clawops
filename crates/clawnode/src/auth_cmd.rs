@@ -45,6 +45,8 @@ pub async fn handle_auth_command(
                 active: true,
                 created_at: chrono::Utc::now(),
                 last_used: None,
+                expires_at: None,
+                rotates_key_id: None,
             };
 
             key_store

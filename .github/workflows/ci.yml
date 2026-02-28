@@ -53,12 +53,22 @@ jobs:
         if: matrix.toolchain == 'stable'
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: cargo test
+      - name: cargo test (unit + integration)
         run: cargo test --all --all-features
         env:
-          # Integration tests require real credentials — excluded from CI
-          # Run with: cargo test --features integration
           RUST_LOG: info
+
+      - name: cargo test (safety adversarial tests)
+        if: matrix.toolchain == 'stable'
+        run: cargo test -p clawops-tests --test safety_tests -- --nocapture
+        env:
+          RUST_LOG: warn
+
+      - name: cargo doc
+        if: matrix.toolchain == 'stable'
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: "-D warnings"
 
   typescript:
     name: TypeScript

@@ -11,11 +11,13 @@ members = [
     "crates/claw-health",
     "crates/claw-provision",
     "crates/claw-audit",
+    "crates/claw-observe",
     "crates/claw-briefer",
     "crates/claw-ledger",
     "crates/claw-triage",
     "crates/claw-commander",
     "crates/clawops-tests",
+    "crates/claw-bench",
 ]
 resolver = "2"
 

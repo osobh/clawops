@@ -339,7 +339,7 @@ mod tests {
         let mut batch_called = 0usize;
 
         let result = rp.execute(
-            |batch, cfg| always_succeed(batch, cfg),
+            always_succeed,
             |batch| {
                 batch_called += 1;
                 if batch_called == 1 {

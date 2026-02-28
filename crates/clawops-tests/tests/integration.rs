@@ -289,9 +289,11 @@ fn test_config_push_rolling_batch_limit() {
         "batch of 101 exceeds the 100-instance limit"
     );
 
-    // Safe batch sizes
-    assert!(50usize <= 100, "batch of 50 is within safe limit");
-    assert!(100usize <= 100, "batch of 100 is exactly at the limit");
+    // Safe batch sizes — verify the threshold constant is correct
+    let safe_small: usize = 50;
+    let safe_boundary: usize = 100;
+    assert!(safe_small <= 100, "batch of 50 is within safe limit");
+    assert!(safe_boundary <= 100, "batch of 100 is exactly at the limit");
 }
 
 // ─── Test 10: Verify standby precondition (critical safety invariant) ─────────

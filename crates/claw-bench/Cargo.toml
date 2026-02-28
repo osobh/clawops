@@ -1,0 +1,27 @@
+[package]
+name = "claw-bench"
+version.workspace = true
+edition.workspace = true
+description = "Performance benchmarks for ClawOps fleet operations"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bench]]
+name = "benchmarks"
+harness = false
+
+[dependencies]
+claw-health    = { path = "../claw-health" }
+claw-metrics   = { path = "../claw-metrics" }
+claw-provision = { path = "../claw-provision" }
+claw-proto     = { path = "../claw-proto" }
+chrono         = { workspace = true }
+sha2           = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[lints]
+workspace = true
