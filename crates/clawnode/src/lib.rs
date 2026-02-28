@@ -14,6 +14,7 @@ pub mod error;
 pub mod health_cmd;
 pub mod identity;
 pub mod persist;
+pub mod rolling_push;
 pub mod secrets_cmd;
 pub mod vps_cmd;
 

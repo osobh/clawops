@@ -1,0 +1,20 @@
+[package]
+name = "claw-commander"
+version.workspace = true
+edition.workspace = true
+description = "Commander orchestration engine — intent parsing, safety checks, specialist routing"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+claw-proto = { path = "../claw-proto" }
+claw-briefer = { path = "../claw-briefer" }
+claw-ledger = { path = "../claw-ledger" }
+claw-triage = { path = "../claw-triage" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+[lints]
+workspace = true
