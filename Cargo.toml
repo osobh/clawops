@@ -1,18 +1,22 @@
 [workspace]
 members = [
-    "gf-clawnode",
-    "gf-node-proto",
-    "gf-provision",
-    "gf-health",
-    "gf-failover",
-    "gf-metrics",
-    "gf-audit",
+    "crates/clawnode",
+    "crates/claw-proto",
+    "crates/claw-persist",
+    "crates/claw-identity",
+    "crates/claw-secrets",
+    "crates/claw-auth",
+    "crates/claw-config",
+    "crates/claw-metrics",
+    "crates/claw-health",
+    "crates/claw-provision",
+    "crates/claw-audit",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["RedClaw Systems LLC <ops@redclaw.systems>"]
 license = "MIT"
 repository = "https://github.com/redclaw/clawops"
@@ -20,49 +24,47 @@ rust-version = "1.93"
 
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1.43", features = ["full"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
-futures = "0.3"
+futures-util = "0.3"
 
 # Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 # Error handling
 anyhow = "1"
-thiserror = "2"
+thiserror = "2.0"
 
 # Logging / tracing
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
-
-# Protobuf / gRPC
-prost = "0.13"
-tonic = "0.12"
-prost-types = "0.13"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 # IDs and time
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Async traits
 async-trait = "0.1"
 
 # Crypto / security
-hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 
-# Config
-config = "0.14"
-dotenvy = "0.15"
+# CLI
+clap = { version = "4.5", features = ["derive"] }
 
-# CLI (for gf-clawnode)
-clap = { version = "4", features = ["derive", "env"] }
+# Concurrency
+parking_lot = "0.12"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
 
 [profile.release]
 opt-level = 3

@@ -1,0 +1,17 @@
+[package]
+name = "claw-proto"
+version.workspace = true
+edition.workspace = true
+description = "Protocol types for ClawOps VPS node protocol"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+thiserror = "2.0"
+
+[lints]
+workspace = true

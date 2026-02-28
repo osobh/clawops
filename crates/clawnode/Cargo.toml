@@ -1,0 +1,43 @@
+[package]
+name = "clawnode"
+version.workspace = true
+edition.workspace = true
+description = "ClawOps VPS node agent — connects to OpenClaw gateway for fleet management"
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "clawnode"
+path = "src/main.rs"
+
+[dependencies]
+claw-proto    = { path = "../claw-proto" }
+claw-persist  = { path = "../claw-persist" }
+claw-identity = { path = "../claw-identity" }
+claw-secrets  = { path = "../claw-secrets" }
+claw-auth     = { path = "../claw-auth" }
+claw-config   = { path = "../claw-config" }
+claw-metrics  = { path = "../claw-metrics" }
+claw-health   = { path = "../claw-health" }
+
+serde          = { version = "1.0", features = ["derive"] }
+serde_json     = "1.0"
+tokio          = { version = "1.43", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util   = "0.3"
+tracing        = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow         = "1"
+thiserror      = "2.0"
+chrono         = { version = "0.4", features = ["serde"] }
+uuid           = { version = "1.11", features = ["v4", "serde"] }
+clap           = { version = "4.5", features = ["derive"] }
+url            = "2"
+hostname       = "0.4"
+dirs           = "5"
+sysinfo        = "0.32"
+reqwest        = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+sha2           = "0.10"
+
+[lints]
+workspace = true
