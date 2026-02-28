@@ -290,6 +290,296 @@ fn build_client() -> reqwest::Client {
         .expect("failed to build HTTP client")
 }
 
+// ─── Instance Pair ────────────────────────────────────────────────────────────
+
+/// A provisioned primary+standby pair on (ideally) different providers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstancePair {
+    pub pair_id: String,
+    pub account_id: String,
+    pub tier: InstanceTier,
+    pub primary: ProvisionResult,
+    pub primary_provider: VpsProvider,
+    pub primary_region: String,
+    pub standby: ProvisionResult,
+    pub standby_provider: VpsProvider,
+    pub standby_region: String,
+    pub provisioned_at: DateTime<Utc>,
+}
+
+/// Result of a bulk provisioning operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BulkProvisionResult {
+    pub requested: u32,
+    pub succeeded: u32,
+    pub failed: u32,
+    pub results: Vec<ProvisionResult>,
+    pub completed_at: DateTime<Utc>,
+}
+
+/// Score a provider for selection using weighted factors.
+/// Returns a score in [0.0, 1.0].
+pub fn score_provider(
+    health_score: u8,
+    cost_score: f32,
+    latency_class: &LatencyClass,
+    provision_success_rate: f32,
+) -> f32 {
+    let health = health_score as f32 / 100.0;
+    let latency = match latency_class {
+        LatencyClass::Low => 1.0,
+        LatencyClass::Medium => 0.6,
+        LatencyClass::High => 0.2,
+    };
+    let reliability = provision_success_rate.clamp(0.0, 1.0);
+    let cost = cost_score.clamp(0.0, 1.0);
+
+    (health * 0.4) + (cost * 0.3) + (latency * 0.2) + (reliability * 0.1)
+}
+
+/// Parameters for provisioning a primary+standby pair.
+#[derive(Debug, Clone)]
+pub struct PairProvisionRequest {
+    pub account_id: String,
+    pub tier: InstanceTier,
+    pub primary_provider: VpsProvider,
+    pub primary_region: String,
+    pub standby_provider: VpsProvider,
+    pub standby_region: String,
+    pub gateway_url: String,
+    pub auth_token: String,
+    pub requested_by: String,
+}
+
+/// High-level fleet operations built on the ProviderRegistry.
+pub struct FleetProvisioner<'a> {
+    registry: &'a ProviderRegistry,
+}
+
+impl<'a> FleetProvisioner<'a> {
+    pub fn new(registry: &'a ProviderRegistry) -> Self {
+        Self { registry }
+    }
+
+    /// Provision a primary+standby pair.
+    ///
+    /// Primary goes on `primary_provider`; standby goes on a different provider
+    /// where possible (for fault isolation). Both are provisioned concurrently.
+    pub async fn provision_pair(&self, req: PairProvisionRequest) -> Result<InstancePair> {
+        let account_id = req.account_id.as_str();
+        let tier = req.tier;
+        let primary_provider = req.primary_provider;
+        let primary_region = req.primary_region.as_str();
+        let standby_provider = req.standby_provider;
+        let standby_region = req.standby_region.as_str();
+        let gateway_url = req.gateway_url.as_str();
+        let auth_token = req.auth_token.as_str();
+        let requested_by = req.requested_by.as_str();
+        let pair_id = Uuid::new_v4().to_string();
+        let now = Utc::now();
+
+        let primary_req = ProvisionRequest {
+            request_id: Uuid::new_v4(),
+            account_id: account_id.to_string(),
+            tier,
+            role: InstanceRole::Primary,
+            provider: primary_provider,
+            region: primary_region.to_string(),
+            pair_instance_id: None, // will be updated after standby is known
+            openclaw_config: Some(serde_json::json!({
+                "gateway_url": gateway_url,
+                "auth_token": auth_token,
+                "role": "primary",
+            })),
+            requested_by: requested_by.to_string(),
+            requested_at: now,
+        };
+
+        let standby_req = ProvisionRequest {
+            request_id: Uuid::new_v4(),
+            account_id: account_id.to_string(),
+            tier,
+            role: InstanceRole::Standby,
+            provider: standby_provider,
+            region: standby_region.to_string(),
+            pair_instance_id: None,
+            openclaw_config: Some(serde_json::json!({
+                "gateway_url": gateway_url,
+                "auth_token": auth_token,
+                "role": "standby",
+            })),
+            requested_by: requested_by.to_string(),
+            requested_at: now,
+        };
+
+        let primary_prov = self
+            .registry
+            .get(provider_name(&primary_provider))
+            .ok_or_else(|| {
+                anyhow::anyhow!("primary provider '{}' not registered", primary_provider)
+            })?;
+        let standby_prov = self
+            .registry
+            .get(provider_name(&standby_provider))
+            .ok_or_else(|| {
+                anyhow::anyhow!("standby provider '{}' not registered", standby_provider)
+            })?;
+
+        // Provision concurrently
+        let (primary_result, standby_result) = tokio::join!(
+            primary_prov.provision(&primary_req),
+            standby_prov.provision(&standby_req),
+        );
+
+        let primary_result = primary_result.context("primary provisioning failed")?;
+        let standby_result = standby_result.context("standby provisioning failed")?;
+
+        info!(
+            pair_id = %pair_id,
+            primary = ?primary_result.instance_id,
+            standby = ?standby_result.instance_id,
+            "pair provisioned"
+        );
+
+        Ok(InstancePair {
+            pair_id,
+            account_id: account_id.to_string(),
+            tier,
+            primary: primary_result,
+            primary_provider,
+            primary_region: primary_region.to_string(),
+            standby: standby_result,
+            standby_provider,
+            standby_region: standby_region.to_string(),
+            provisioned_at: now,
+        })
+    }
+
+    /// Provision multiple standalone instances (not paired).
+    ///
+    /// PRD safety: no more than 100 without rolling validation.
+    pub async fn bulk_provision(
+        &self,
+        requests: Vec<ProvisionRequest>,
+    ) -> Result<BulkProvisionResult> {
+        if requests.len() > 100 {
+            bail!(
+                "bulk_provision: refusing to provision {} instances at once (max 100 per PRD safety rule)",
+                requests.len()
+            );
+        }
+
+        let total = requests.len() as u32;
+        let mut results = Vec::with_capacity(requests.len());
+        let mut succeeded = 0u32;
+        let mut failed = 0u32;
+
+        for req in &requests {
+            let provider_name_str = provider_name(&req.provider);
+            match self.registry.get(provider_name_str) {
+                Some(provider) => match provider.provision(req).await {
+                    Ok(result) => {
+                        if result.success {
+                            succeeded += 1;
+                        } else {
+                            failed += 1;
+                        }
+                        results.push(result);
+                    }
+                    Err(e) => {
+                        warn!(provider = provider_name_str, "provision failed: {e}");
+                        failed += 1;
+                        results.push(ProvisionResult {
+                            request_id: req.request_id,
+                            instance_id: None,
+                            success: false,
+                            error: Some(e.to_string()),
+                            provision_duration_ms: 0,
+                            instance_ip: None,
+                            tailscale_ip: None,
+                            provider_instance_id: None,
+                        });
+                    }
+                },
+                None => {
+                    warn!(provider = provider_name_str, "provider not registered");
+                    failed += 1;
+                    results.push(ProvisionResult {
+                        request_id: req.request_id,
+                        instance_id: None,
+                        success: false,
+                        error: Some(format!("provider '{provider_name_str}' not registered")),
+                        provision_duration_ms: 0,
+                        instance_ip: None,
+                        tailscale_ip: None,
+                        provider_instance_id: None,
+                    });
+                }
+            }
+        }
+
+        info!(total, succeeded, failed, "bulk provision complete");
+        Ok(BulkProvisionResult {
+            requested: total,
+            succeeded,
+            failed,
+            results,
+            completed_at: Utc::now(),
+        })
+    }
+
+    /// Teardown both instances in a pair.
+    ///
+    /// PRD safety: both teardowns are attempted; errors are collected.
+    /// NEVER called without an audit record having been written first.
+    pub async fn teardown_pair(&self, pair: &InstancePair) -> Result<(bool, Vec<String>)> {
+        let mut errors = Vec::new();
+
+        // Teardown primary
+        let primary_id = pair
+            .primary
+            .provider_instance_id
+            .as_deref()
+            .unwrap_or_default();
+        if let Some(provider) = self.registry.get(provider_name(&pair.primary_provider)) {
+            if let Err(e) = provider.teardown(primary_id, &pair.account_id).await {
+                errors.push(format!("primary teardown failed: {e}"));
+            }
+        } else {
+            errors.push(format!(
+                "primary provider '{}' not registered",
+                pair.primary_provider
+            ));
+        }
+
+        // Teardown standby
+        let standby_id = pair
+            .standby
+            .provider_instance_id
+            .as_deref()
+            .unwrap_or_default();
+        if let Some(provider) = self.registry.get(provider_name(&pair.standby_provider)) {
+            if let Err(e) = provider.teardown(standby_id, &pair.account_id).await {
+                errors.push(format!("standby teardown failed: {e}"));
+            }
+        } else {
+            errors.push(format!(
+                "standby provider '{}' not registered",
+                pair.standby_provider
+            ));
+        }
+
+        let success = errors.is_empty();
+        if success {
+            info!(pair_id = %pair.pair_id, "pair torn down successfully");
+        } else {
+            warn!(pair_id = %pair.pair_id, errors = ?errors, "pair teardown had errors");
+        }
+
+        Ok((success, errors))
+    }
+}
+
 // ─── Cloud-init bootstrap script ──────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -1064,6 +1354,33 @@ mod tests {
     fn test_provider_registry_empty() {
         let registry = ProviderRegistry::new();
         assert!(registry.get("hetzner").is_none());
+    }
+
+    #[test]
+    fn test_score_provider_healthy_low_latency() {
+        // health=1.0, cost=1.0, latency=low(1.0), reliability=1.0 → 1.0
+        let score = score_provider(100, 1.0, &LatencyClass::Low, 1.0);
+        assert!((score - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_score_provider_medium_latency_penalised() {
+        let low = score_provider(100, 1.0, &LatencyClass::Low, 1.0);
+        let med = score_provider(100, 1.0, &LatencyClass::Medium, 1.0);
+        assert!(low > med, "low latency should score higher than medium");
+    }
+
+    #[test]
+    fn test_score_provider_high_latency_lowest() {
+        let med = score_provider(100, 1.0, &LatencyClass::Medium, 1.0);
+        let high = score_provider(100, 1.0, &LatencyClass::High, 1.0);
+        assert!(med > high, "medium latency should score higher than high");
+    }
+
+    #[test]
+    fn test_score_provider_unhealthy_scores_low() {
+        let score = score_provider(0, 0.0, &LatencyClass::High, 0.0);
+        assert!(score < 0.1, "fully unhealthy provider should score near 0");
     }
 
     #[test]

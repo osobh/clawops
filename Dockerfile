@@ -5,45 +5,55 @@ FROM rust:1.93-slim-bookworm AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
-    libssh2-1-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
-# Cache dependencies by copying manifests first
+# Cache workspace dependencies by copying manifests first
 COPY Cargo.toml Cargo.lock ./
-COPY gf-node-proto/Cargo.toml gf-node-proto/
-COPY gf-provision/Cargo.toml gf-provision/
-COPY gf-health/Cargo.toml gf-health/
-COPY gf-failover/Cargo.toml gf-failover/
-COPY gf-metrics/Cargo.toml gf-metrics/
-COPY gf-audit/Cargo.toml gf-audit/
-COPY gf-clawnode/Cargo.toml gf-clawnode/
+COPY crates/claw-proto/Cargo.toml      crates/claw-proto/
+COPY crates/claw-persist/Cargo.toml   crates/claw-persist/
+COPY crates/claw-identity/Cargo.toml  crates/claw-identity/
+COPY crates/claw-secrets/Cargo.toml   crates/claw-secrets/
+COPY crates/claw-auth/Cargo.toml      crates/claw-auth/
+COPY crates/claw-config/Cargo.toml    crates/claw-config/
+COPY crates/claw-metrics/Cargo.toml   crates/claw-metrics/
+COPY crates/claw-health/Cargo.toml    crates/claw-health/
+COPY crates/claw-provision/Cargo.toml crates/claw-provision/
+COPY crates/claw-audit/Cargo.toml     crates/claw-audit/
+COPY crates/clawnode/Cargo.toml       crates/clawnode/
+COPY crates/clawops-tests/Cargo.toml  crates/clawops-tests/
 
 # Create stub lib/main files for dependency caching
-RUN for crate in gf-node-proto gf-provision gf-health gf-failover gf-metrics gf-audit; do \
-    mkdir -p $crate/src && echo "pub fn _stub() {}" > $crate/src/lib.rs; \
+RUN for crate in claw-proto claw-persist claw-identity claw-secrets claw-auth \
+        claw-config claw-metrics claw-health claw-provision claw-audit clawops-tests; do \
+        mkdir -p crates/$crate/src && echo "pub fn _stub() {}" > crates/$crate/src/lib.rs; \
     done && \
-    mkdir -p gf-clawnode/src && echo "fn main() {}" > gf-clawnode/src/main.rs
+    mkdir -p crates/clawnode/src && echo "fn main() {}" > crates/clawnode/src/main.rs && \
+    mkdir -p crates/clawops-tests/tests
 
-RUN cargo build --release --bin gf-clawnode 2>/dev/null || true
+RUN cargo build --release --bin clawnode 2>/dev/null || true
 
-# Now copy real source and build
-COPY gf-node-proto/src gf-node-proto/src
-COPY gf-provision/src gf-provision/src
-COPY gf-health/src gf-health/src
-COPY gf-failover/src gf-failover/src
-COPY gf-metrics/src gf-metrics/src
-COPY gf-audit/src gf-audit/src
-COPY gf-clawnode/src gf-clawnode/src
+# Copy real source files
+COPY crates/claw-proto/src      crates/claw-proto/src
+COPY crates/claw-persist/src    crates/claw-persist/src
+COPY crates/claw-identity/src   crates/claw-identity/src
+COPY crates/claw-secrets/src    crates/claw-secrets/src
+COPY crates/claw-auth/src       crates/claw-auth/src
+COPY crates/claw-config/src     crates/claw-config/src
+COPY crates/claw-metrics/src    crates/claw-metrics/src
+COPY crates/claw-health/src     crates/claw-health/src
+COPY crates/claw-provision/src  crates/claw-provision/src
+COPY crates/claw-audit/src      crates/claw-audit/src
+COPY crates/clawnode/src        crates/clawnode/src
 
-# Touch source files to invalidate the stub cache
+# Touch sources to invalidate stub cache
 RUN find . -name "*.rs" -not -path "*/target/*" -exec touch {} +
 
-RUN cargo build --release --bin gf-clawnode
+RUN cargo build --release --bin clawnode
 
 # Strip the binary to minimize size
-RUN strip target/release/gf-clawnode
+RUN strip target/release/clawnode
 
 # ─── Stage 2: Runtime ─────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime
@@ -52,7 +62,6 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
-    libssh2-1 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -60,21 +69,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd -r clawnode && useradd -r -g clawnode -s /bin/false clawnode
 
 # Create required directories
-RUN mkdir -p /etc/gf-clawnode /var/log/gf-clawnode && \
-    chown -R clawnode:clawnode /var/log/gf-clawnode
+RUN mkdir -p /etc/clawnode /var/lib/clawnode/state /var/log/clawnode && \
+    chown -R clawnode:clawnode /etc/clawnode /var/lib/clawnode /var/log/clawnode
 
 # Copy binary from builder
-COPY --from=builder /build/target/release/gf-clawnode /usr/local/bin/gf-clawnode
-RUN chmod +x /usr/local/bin/gf-clawnode
+COPY --from=builder /build/target/release/clawnode /usr/local/bin/clawnode
+RUN chmod +x /usr/local/bin/clawnode
 
-# Health check: verify the binary can start and respond
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+# Health check: verify the agent is alive via its health endpoint
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -sf http://localhost:8090/health || exit 1
 
-# Default config path (override with GF_CONFIG_FILE env var)
-ENV GF_CONFIG_FILE=/etc/gf-clawnode/config.toml
+# Environment variables (override in docker-compose or env file)
+ENV CLAWNODE_INSTANCE_ID="" \
+    CLAWNODE_ACCOUNT_ID="" \
+    CLAWNODE_GATEWAY_URL="" \
+    CLAWNODE_AUTH_TOKEN="" \
+    CLAWNODE_PROVIDER="hetzner" \
+    CLAWNODE_REGION="eu-hetzner-nbg1" \
+    CLAWNODE_TIER="standard" \
+    CLAWNODE_ROLE="primary" \
+    CLAWNODE_STATE_DIR="/var/lib/clawnode/state" \
+    RUST_LOG="clawnode=info,claw_health=info,claw_metrics=info"
 
 USER clawnode
 
-ENTRYPOINT ["/usr/local/bin/gf-clawnode"]
-CMD ["--config", "/etc/gf-clawnode/config.toml"]
+ENTRYPOINT ["/usr/local/bin/clawnode"]

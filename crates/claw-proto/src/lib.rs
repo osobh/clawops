@@ -313,6 +313,164 @@ pub struct CommandResult {
     pub duration_ms: u64,
 }
 
+// ─── Detailed Health Check Types ─────────────────────────────────────────────
+
+/// Status of a single health check component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CheckStatus {
+    Healthy,
+    Degraded,
+    Critical,
+}
+
+/// A single named health check with its status and current value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthCheck {
+    pub name: String,
+    pub status: CheckStatus,
+    pub message: String,
+    pub value: Option<f64>,
+}
+
+/// Structured health check response (command: health.check).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthCheckResponse {
+    pub instance_id: String,
+    pub score: u8,
+    pub checks: Vec<HealthCheck>,
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Structured VPS metrics response (command: vps.metrics).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VpsMetricsResponse {
+    pub instance_id: String,
+    pub cpu_percent: f32,
+    pub memory_used_mb: u64,
+    pub memory_total_mb: u64,
+    pub disk_used_gb: u64,
+    pub disk_total_gb: u64,
+    pub network_rx_bytes: u64,
+    pub network_tx_bytes: u64,
+    pub load_avg_1m: f32,
+    pub load_avg_5m: f32,
+    pub load_avg_15m: f32,
+    pub timestamp: DateTime<Utc>,
+}
+
+// ─── Fleet Status Types ───────────────────────────────────────────────────────
+
+/// Per-provider summary within a fleet status response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderStatus {
+    pub provider: VpsProvider,
+    pub total: u32,
+    pub active: u32,
+    pub degraded: u32,
+    pub failed: u32,
+    pub avg_health_score: f32,
+}
+
+/// Fleet-wide status response (command: fleet.status).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FleetStatusResponse {
+    pub total_instances: u32,
+    pub active: u32,
+    pub degraded: u32,
+    pub failed: u32,
+    pub bootstrapping: u32,
+    pub providers: std::collections::HashMap<String, ProviderStatus>,
+    pub generated_at: DateTime<Utc>,
+}
+
+// ─── Instance Pair Types ──────────────────────────────────────────────────────
+
+/// Status of a single instance within a pair.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstanceStatus {
+    pub instance_id: String,
+    pub state: InstanceState,
+    pub health_score: u8,
+    pub provider: VpsProvider,
+    pub region: String,
+    pub ip_public: Option<String>,
+}
+
+/// Combined status of a primary+standby pair.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstancePairStatus {
+    pub pair_id: String,
+    pub account_id: String,
+    pub primary: InstanceStatus,
+    pub standby: Option<InstanceStatus>,
+    pub pair_health: u8,
+    pub checked_at: DateTime<Utc>,
+}
+
+impl InstancePairStatus {
+    /// Pair health = min(primary_score, standby_score) or primary_score if no standby.
+    pub fn compute_pair_health(primary_score: u8, standby_score: Option<u8>) -> u8 {
+        match standby_score {
+            Some(s) => primary_score.min(s),
+            None => primary_score,
+        }
+    }
+}
+
+// ─── Teardown Types ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeardownRequest {
+    pub request_id: Uuid,
+    pub account_id: String,
+    pub instance_id: String,
+    pub provider_instance_id: String,
+    pub provider: VpsProvider,
+    pub reason: String,
+    pub requested_by: String,
+    pub requested_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeardownResult {
+    pub request_id: Uuid,
+    pub instance_id: String,
+    pub success: bool,
+    pub error: Option<String>,
+    pub duration_ms: u64,
+    pub completed_at: DateTime<Utc>,
+}
+
+// ─── Config Push Types ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigPushRequest {
+    pub request_id: Uuid,
+    pub account_id: String,
+    pub target_instances: Vec<String>,
+    pub config_payload: serde_json::Value,
+    pub restart_after_push: bool,
+    pub dry_run: bool,
+    pub requested_by: String,
+    pub requested_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigPushResult {
+    pub request_id: Uuid,
+    pub succeeded: Vec<String>,
+    pub failed: Vec<ConfigPushFailure>,
+    pub dry_run: bool,
+    pub completed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigPushFailure {
+    pub instance_id: String,
+    pub error: String,
+}
+
 // ─── Validation ───────────────────────────────────────────────────────────────
 
 /// Validate an instance ID format.
@@ -351,6 +509,32 @@ mod tests {
     fn test_vps_provider_display() {
         assert_eq!(VpsProvider::Hetzner.to_string(), "hetzner");
         assert_eq!(VpsProvider::DigitalOcean.to_string(), "digitalocean");
+    }
+
+    #[test]
+    fn test_instance_pair_status_pair_health() {
+        assert_eq!(InstancePairStatus::compute_pair_health(90, Some(80)), 80);
+        assert_eq!(InstancePairStatus::compute_pair_health(80, Some(90)), 80);
+        assert_eq!(InstancePairStatus::compute_pair_health(75, None), 75);
+    }
+
+    #[test]
+    fn test_health_check_response_serialization() {
+        let resp = HealthCheckResponse {
+            instance_id: "i-test".to_string(),
+            score: 85,
+            checks: vec![HealthCheck {
+                name: "cpu".to_string(),
+                status: CheckStatus::Healthy,
+                message: "CPU usage normal".to_string(),
+                value: Some(22.0),
+            }],
+            timestamp: Utc::now(),
+        };
+        let json = serde_json::to_string(&resp).expect("serialize");
+        let back: HealthCheckResponse = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.score, 85);
+        assert_eq!(back.checks.len(), 1);
     }
 
     #[test]

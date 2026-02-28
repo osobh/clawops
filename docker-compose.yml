@@ -2,34 +2,39 @@ version: '3.9'
 
 # ClawOps local development environment
 # Usage: docker compose up -d
-# Requires: .env file with GF_API_KEY, INSTANCE_ID, GATEWAY_URL
+# Requires: .env file with provider API keys and gateway credentials
 
 services:
-  # ─── gf-clawnode: VPS instance agent ───────────────────────────────────────
+  # ─── clawnode: VPS instance agent ──────────────────────────────────────────
   clawnode:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: gf-clawnode-dev
+    container_name: clawnode-dev
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      INSTANCE_ID: ${INSTANCE_ID:-dev-instance-001}
-      GATEWAY_URL: ${GATEWAY_URL:-ws://host.docker.internal:8443}
-      GF_API_KEY: ${GF_API_KEY:-dev-api-key}
-      GF_API_BASE: ${GF_API_BASE:-https://api.gatewayforge.io}
-      NODE_PROVIDER: ${NODE_PROVIDER:-hetzner}
-      NODE_REGION: ${NODE_REGION:-eu-hetzner-nbg1}
-      NODE_TIER: ${NODE_TIER:-standard}
-      NODE_ROLE: ${NODE_ROLE:-primary}
-      ACCOUNT_ID: ${ACCOUNT_ID:-dev-account}
-      HEARTBEAT_INTERVAL_SECS: ${HEARTBEAT_INTERVAL_SECS:-30}
-      METRICS_INTERVAL_SECS: ${METRICS_INTERVAL_SECS:-60}
-      RUST_LOG: ${RUST_LOG:-gf_clawnode=debug,gf_health=debug,gf_metrics=info,gf_audit=info}
+      CLAWNODE_INSTANCE_ID: ${CLAWNODE_INSTANCE_ID:-dev-instance-001}
+      CLAWNODE_ACCOUNT_ID: ${CLAWNODE_ACCOUNT_ID:-dev-account}
+      CLAWNODE_GATEWAY_URL: ${CLAWNODE_GATEWAY_URL:-ws://host.docker.internal:8443}
+      CLAWNODE_AUTH_TOKEN: ${CLAWNODE_AUTH_TOKEN:-dev-auth-token}
+      CLAWNODE_PROVIDER: ${CLAWNODE_PROVIDER:-hetzner}
+      CLAWNODE_REGION: ${CLAWNODE_REGION:-eu-hetzner-nbg1}
+      CLAWNODE_TIER: ${CLAWNODE_TIER:-standard}
+      CLAWNODE_ROLE: ${CLAWNODE_ROLE:-primary}
+      CLAWNODE_STATE_DIR: /var/lib/clawnode/state
+      # Provider API keys (for provisioning operations)
+      HETZNER_API_TOKEN: ${HETZNER_API_TOKEN:-}
+      VULTR_API_KEY: ${VULTR_API_KEY:-}
+      CONTABO_API_KEY: ${CONTABO_API_KEY:-}
+      HOSTINGER_API_KEY: ${HOSTINGER_API_KEY:-}
+      DO_API_TOKEN: ${DO_API_TOKEN:-}
+      # Logging
+      RUST_LOG: ${RUST_LOG:-clawnode=debug,claw_health=debug,claw_metrics=info,claw_provision=info}
     volumes:
-      - clawnode-config:/etc/gf-clawnode
-      - clawnode-logs:/var/log/gf-clawnode
+      - clawnode-state:/var/lib/clawnode/state
+      - clawnode-logs:/var/log/clawnode
     networks:
       - clawops-net
     extra_hosts:
@@ -44,19 +49,24 @@ services:
       redis:
         condition: service_healthy
 
-  # ─── Redis: state store for clawnode ───────────────────────────────────────
-  # Used for: heartbeat deduplication, command queue, metrics ring buffer
+  # ─── Redis: state cache and command queue ────────────────────────────────────
+  # Used for: heartbeat deduplication, metrics ring buffer, command queuing
   redis:
     image: redis:7-alpine
-    container_name: gf-redis-dev
+    container_name: clawops-redis-dev
     restart: unless-stopped
-    command: redis-server --save 60 1 --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: >
+      redis-server
+      --save 60 1
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
     volumes:
       - redis-data:/data
     networks:
       - clawops-net
     ports:
-      - "127.0.0.1:6379:6379"  # Bind only to localhost for security
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -65,7 +75,7 @@ services:
       start_period: 5s
 
 volumes:
-  clawnode-config:
+  clawnode-state:
     driver: local
   clawnode-logs:
     driver: local

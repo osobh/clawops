@@ -1,0 +1,22 @@
+[package]
+name = "clawops-tests"
+version.workspace = true
+edition.workspace = true
+description = "Integration tests for ClawOps Phase 3"
+license.workspace = true
+publish = false
+
+[lib]
+name = "clawops_tests"
+path = "src/lib.rs"
+
+[dev-dependencies]
+claw-proto    = { path = "../claw-proto" }
+claw-health   = { path = "../claw-health" }
+claw-metrics  = { path = "../claw-metrics" }
+claw-provision = { path = "../claw-provision" }
+serde_json     = "1.0"
+chrono         = { version = "0.4", features = ["serde"] }
+
+[lints]
+workspace = true

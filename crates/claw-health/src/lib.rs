@@ -440,6 +440,249 @@ pub fn sweep_fleet(
     result
 }
 
+// ─── Failover State Machine ────────────────────────────────────────────────────
+
+/// Maximum heal attempts before escalating to Commander.
+pub const MAX_HEAL_ATTEMPTS: u32 = 3;
+
+/// States of the failover state machine for a single instance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailoverState {
+    /// Instance is healthy — normal operation.
+    Normal,
+    /// Score is degraded; watching for further decline.
+    Monitoring {
+        since: DateTime<Utc>,
+        low_score_count: u32,
+    },
+    /// Attempting to self-heal (docker restart, process restart, etc.).
+    Healing {
+        attempt: u32,
+        started_at: DateTime<Utc>,
+    },
+    /// Actively failing over to standby.
+    FailingOver { started_at: DateTime<Utc> },
+    /// Failover/heal exhausted — human intervention required.
+    Failed {
+        since: DateTime<Utc>,
+        reason: String,
+    },
+    /// Successfully recovered after heal or failover.
+    Recovered { at: DateTime<Utc> },
+}
+
+impl FailoverState {
+    /// Construct the initial state.
+    pub fn new() -> Self {
+        Self::Normal
+    }
+
+    /// True if the machine is in a terminal/stable good state.
+    pub fn is_stable(&self) -> bool {
+        matches!(self, Self::Normal | Self::Recovered { .. })
+    }
+
+    /// True if human attention is needed.
+    pub fn needs_escalation(&self) -> bool {
+        matches!(self, Self::Failed { .. })
+    }
+}
+
+impl Default for FailoverState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Drives the failover state machine based on incoming health scores.
+///
+/// Callers should call `transition` on each health check cycle. The returned
+/// `FailoverTransition` tells the caller what action to perform.
+pub struct FailoverStateMachine {
+    pub instance_id: String,
+    pub role: InstanceRole,
+    pub state: FailoverState,
+    thresholds: HealthThresholds,
+}
+
+/// What the state machine asks the caller to do after a transition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailoverTransition {
+    /// No action needed.
+    NoAction,
+    /// Continue monitoring — score is low but within tolerable range.
+    Monitor,
+    /// Perform a Docker / OpenClaw restart.
+    AttemptDockerRestart { attempt: u32 },
+    /// Verify standby is ACTIVE, then initiate failover.
+    InitiateFailover,
+    /// Escalate to Commander — heal attempts exhausted or standby not ready.
+    EscalateToCommander { reason: String },
+    /// Instance has recovered — log and resume normal monitoring.
+    LogRecovered,
+}
+
+impl FailoverStateMachine {
+    pub fn new(instance_id: String, role: InstanceRole, thresholds: HealthThresholds) -> Self {
+        Self {
+            instance_id,
+            role,
+            state: FailoverState::Normal,
+            thresholds,
+        }
+    }
+
+    /// Process a new health score and determine the next transition.
+    ///
+    /// PRD §5.3 six-step sequence:
+    /// 1. Verify: if score recovers >degraded → back to Normal.
+    /// 2. Docker restart: attempt restart.
+    /// 3. Wait + recheck (caller handles the wait).
+    /// 4. Check if PRIMARY of a pair.
+    /// 5. If standby active → trigger failover.
+    /// 6. If standby NOT active → CRITICAL alert to Commander.
+    pub fn transition(&mut self, health_score: u8, standby_active: bool) -> FailoverTransition {
+        let now = Utc::now();
+
+        match &self.state.clone() {
+            // ── Normal ──────────────────────────────────────────────────────
+            FailoverState::Normal => {
+                if health_score < self.thresholds.critical_score {
+                    self.state = FailoverState::Healing {
+                        attempt: 1,
+                        started_at: now,
+                    };
+                    info!(instance = %self.instance_id, score = health_score, "entering healing state (attempt 1)");
+                    return FailoverTransition::AttemptDockerRestart { attempt: 1 };
+                }
+                if health_score < self.thresholds.degraded_score {
+                    self.state = FailoverState::Monitoring {
+                        since: now,
+                        low_score_count: 1,
+                    };
+                    return FailoverTransition::Monitor;
+                }
+                FailoverTransition::NoAction
+            }
+
+            // ── Monitoring ──────────────────────────────────────────────────
+            FailoverState::Monitoring {
+                since,
+                low_score_count,
+            } => {
+                if health_score >= self.thresholds.degraded_score {
+                    info!(instance = %self.instance_id, "health recovered from monitoring");
+                    self.state = FailoverState::Recovered { at: now };
+                    return FailoverTransition::LogRecovered;
+                }
+                if health_score < self.thresholds.critical_score {
+                    self.state = FailoverState::Healing {
+                        attempt: 1,
+                        started_at: now,
+                    };
+                    warn!(instance = %self.instance_id, score = health_score, since = %since, "health dropped to critical from monitoring");
+                    return FailoverTransition::AttemptDockerRestart { attempt: 1 };
+                }
+                self.state = FailoverState::Monitoring {
+                    since: *since,
+                    low_score_count: low_score_count + 1,
+                };
+                FailoverTransition::Monitor
+            }
+
+            // ── Healing ─────────────────────────────────────────────────────
+            FailoverState::Healing { attempt, .. } => {
+                if health_score >= self.thresholds.degraded_score {
+                    info!(instance = %self.instance_id, attempt, "healed successfully");
+                    self.state = FailoverState::Recovered { at: now };
+                    return FailoverTransition::LogRecovered;
+                }
+
+                let next_attempt = attempt + 1;
+
+                if next_attempt > MAX_HEAL_ATTEMPTS {
+                    // Exhausted heal attempts — decide failover or escalate
+                    if self.role == InstanceRole::Primary {
+                        if standby_active {
+                            warn!(instance = %self.instance_id, "heal exhausted, primary — initiating failover");
+                            self.state = FailoverState::FailingOver { started_at: now };
+                            return FailoverTransition::InitiateFailover;
+                        } else {
+                            warn!(instance = %self.instance_id, "heal exhausted, standby NOT active — escalating");
+                            self.state = FailoverState::Failed {
+                                since: now,
+                                reason: "heal exhausted and standby not active".to_string(),
+                            };
+                            return FailoverTransition::EscalateToCommander {
+                                reason: "heal exhausted and standby not active".to_string(),
+                            };
+                        }
+                    } else {
+                        // Standby instance failed — escalate, don't self-failover
+                        warn!(instance = %self.instance_id, "standby heal exhausted — escalating to Commander");
+                        self.state = FailoverState::Failed {
+                            since: now,
+                            reason: "standby heal exhausted".to_string(),
+                        };
+                        return FailoverTransition::EscalateToCommander {
+                            reason: "standby heal exhausted".to_string(),
+                        };
+                    }
+                }
+
+                warn!(instance = %self.instance_id, attempt = next_attempt, "re-attempting docker restart");
+                self.state = FailoverState::Healing {
+                    attempt: next_attempt,
+                    started_at: now,
+                };
+                FailoverTransition::AttemptDockerRestart {
+                    attempt: next_attempt,
+                }
+            }
+
+            // ── FailingOver ─────────────────────────────────────────────────
+            FailoverState::FailingOver { .. } => {
+                if health_score >= self.thresholds.degraded_score {
+                    self.state = FailoverState::Recovered { at: now };
+                    return FailoverTransition::LogRecovered;
+                }
+                // Still in failover — caller is handling it
+                FailoverTransition::NoAction
+            }
+
+            // ── Failed ──────────────────────────────────────────────────────
+            FailoverState::Failed { reason, .. } => {
+                // Re-escalate on each cycle until operator clears
+                FailoverTransition::EscalateToCommander {
+                    reason: reason.clone(),
+                }
+            }
+
+            // ── Recovered ───────────────────────────────────────────────────
+            FailoverState::Recovered { .. } => {
+                if health_score >= self.thresholds.degraded_score {
+                    self.state = FailoverState::Normal;
+                    return FailoverTransition::NoAction;
+                }
+                // Relapsed — start fresh monitoring cycle
+                self.state = FailoverState::Monitoring {
+                    since: now,
+                    low_score_count: 1,
+                };
+                FailoverTransition::Monitor
+            }
+        }
+    }
+
+    /// Force-reset the machine to Normal (operator action after clearing failure).
+    pub fn reset(&mut self) {
+        self.state = FailoverState::Normal;
+        info!(instance = %self.instance_id, "failover state machine reset by operator");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,5 +900,109 @@ mod tests {
                 .iter()
                 .any(|a| a.alert_type == AlertType::DiskUsageHigh)
         );
+    }
+
+    // ─── FailoverStateMachine tests ───────────────────────────────────────────
+
+    fn make_fsm(role: InstanceRole) -> FailoverStateMachine {
+        FailoverStateMachine::new("i-test".to_string(), role, HealthThresholds::default())
+    }
+
+    #[test]
+    fn test_fsm_healthy_stays_normal() {
+        let mut fsm = make_fsm(InstanceRole::Primary);
+        let t = fsm.transition(95, true);
+        assert_eq!(t, FailoverTransition::NoAction);
+        assert_eq!(fsm.state, FailoverState::Normal);
+    }
+
+    #[test]
+    fn test_fsm_degraded_enters_monitoring() {
+        let mut fsm = make_fsm(InstanceRole::Primary);
+        // score 60 < degraded_score (70) but >= critical_score (40)
+        let t = fsm.transition(60, true);
+        assert_eq!(t, FailoverTransition::Monitor);
+        assert!(matches!(fsm.state, FailoverState::Monitoring { .. }));
+    }
+
+    #[test]
+    fn test_fsm_critical_enters_healing() {
+        let mut fsm = make_fsm(InstanceRole::Primary);
+        // score 30 < critical_score (40)
+        let t = fsm.transition(30, true);
+        assert_eq!(t, FailoverTransition::AttemptDockerRestart { attempt: 1 });
+        assert!(matches!(
+            fsm.state,
+            FailoverState::Healing { attempt: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn test_fsm_heals_on_recovery() {
+        let mut fsm = make_fsm(InstanceRole::Primary);
+        fsm.transition(30, true); // → Healing attempt 1
+        let t = fsm.transition(85, true); // recovered
+        assert_eq!(t, FailoverTransition::LogRecovered);
+        assert!(matches!(fsm.state, FailoverState::Recovered { .. }));
+    }
+
+    #[test]
+    fn test_fsm_heal_exhausted_with_active_standby_triggers_failover() {
+        let mut fsm = make_fsm(InstanceRole::Primary);
+        // Drive through 3 heal attempts without recovery
+        fsm.transition(30, true); // attempt 1
+        fsm.transition(25, true); // attempt 2
+        fsm.transition(20, true); // attempt 3
+        let t = fsm.transition(15, true); // exhausted → failover
+        assert_eq!(t, FailoverTransition::InitiateFailover);
+        assert!(matches!(fsm.state, FailoverState::FailingOver { .. }));
+    }
+
+    #[test]
+    fn test_fsm_heal_exhausted_standby_not_active_escalates() {
+        let mut fsm = make_fsm(InstanceRole::Primary);
+        fsm.transition(30, false); // attempt 1
+        fsm.transition(25, false); // attempt 2
+        fsm.transition(20, false); // attempt 3
+        let t = fsm.transition(15, false); // exhausted → escalate
+        assert!(matches!(t, FailoverTransition::EscalateToCommander { .. }));
+        assert!(matches!(fsm.state, FailoverState::Failed { .. }));
+    }
+
+    #[test]
+    fn test_fsm_standby_exhausted_escalates() {
+        let mut fsm = make_fsm(InstanceRole::Standby);
+        fsm.transition(30, false); // attempt 1
+        fsm.transition(25, false); // attempt 2
+        fsm.transition(20, false); // attempt 3
+        let t = fsm.transition(15, false); // exhausted → escalate, no failover
+        assert!(matches!(t, FailoverTransition::EscalateToCommander { .. }));
+        // Standby should never trigger failover to itself
+        assert!(!matches!(fsm.state, FailoverState::FailingOver { .. }));
+    }
+
+    #[test]
+    fn test_fsm_reset() {
+        let mut fsm = make_fsm(InstanceRole::Primary);
+        fsm.transition(30, false); // enter healing
+        fsm.transition(25, false);
+        fsm.transition(20, false);
+        fsm.transition(15, false); // enter failed
+        assert!(fsm.state.needs_escalation());
+        fsm.reset();
+        assert_eq!(fsm.state, FailoverState::Normal);
+    }
+
+    #[test]
+    fn test_fsm_monitoring_recovers() {
+        let mut fsm = make_fsm(InstanceRole::Primary);
+        fsm.transition(60, true); // → Monitoring
+        let t = fsm.transition(90, true); // recovered
+        assert_eq!(t, FailoverTransition::LogRecovered);
+    }
+
+    #[test]
+    fn test_fsm_max_heal_attempts_constant() {
+        assert_eq!(MAX_HEAL_ATTEMPTS, 3);
     }
 }

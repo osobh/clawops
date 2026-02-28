@@ -11,6 +11,7 @@ members = [
     "crates/claw-health",
     "crates/claw-provision",
     "crates/claw-audit",
+    "crates/clawops-tests",
 ]
 resolver = "2"
 
