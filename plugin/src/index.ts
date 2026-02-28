@@ -73,14 +73,22 @@ function loadConfig(): ClawOpsConfig {
   if (!gfApiBase) throw new Error('GF_API_BASE environment variable is required');
   if (!gfApiKey) throw new Error('GF_API_KEY environment variable is required');
 
-  return {
+  const cfg: ClawOpsConfig = {
     gfApiBase,
     gfApiKey,
     healthPollIntervalMs: parseInt(process.env['HEALTH_POLL_INTERVAL_MS'] ?? '300000', 10),
-    guardianSessionId: process.env['GUARDIAN_SESSION_ID'],
-    ledgerSessionId: process.env['LEDGER_SESSION_ID'],
-    commanderSessionId: process.env['COMMANDER_SESSION_ID'],
   };
+
+  // Only assign optional session IDs when they are actually defined
+  // (exactOptionalPropertyTypes disallows assigning undefined to optional fields)
+  const guardianSessionId = process.env['GUARDIAN_SESSION_ID'];
+  const ledgerSessionId = process.env['LEDGER_SESSION_ID'];
+  const commanderSessionId = process.env['COMMANDER_SESSION_ID'];
+  if (guardianSessionId !== undefined) cfg.guardianSessionId = guardianSessionId;
+  if (ledgerSessionId !== undefined) cfg.ledgerSessionId = ledgerSessionId;
+  if (commanderSessionId !== undefined) cfg.commanderSessionId = commanderSessionId;
+
+  return cfg;
 }
 
 // ─── Plugin registration ──────────────────────────────────────────────────────

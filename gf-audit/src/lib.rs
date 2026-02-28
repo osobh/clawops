@@ -153,7 +153,7 @@ impl AuditLogger {
         let record_id = Uuid::new_v4();
         let correlation_id = correlation_id.unwrap_or_else(Uuid::new_v4);
 
-        let record = AuditRecord {
+        let mut record = AuditRecord {
             record_id,
             correlation_id,
             timestamp: Utc::now(),
@@ -164,9 +164,11 @@ impl AuditLogger {
             result: None,
             operator_confirmation: None,
             previous_hash: self.chain_head.clone(),
-            record_hash: self.compute_hash(&record_id),
+            record_hash: String::new(), // will be set below
         };
 
+        // Compute hash over the fully-formed record (except record_hash itself)
+        record.record_hash = self.compute_hash(&record);
         self.chain_head = Some(record.record_hash.clone());
         self.persist_record(&record).await?;
 
@@ -205,21 +207,52 @@ impl AuditLogger {
         Ok(vec![])
     }
 
-    fn compute_hash(&self, record_id: &Uuid) -> String {
-        // TODO: SHA-256 of (record_id + timestamp + previous_hash + action)
-        format!("{record_id:x}")
+    /// Compute SHA-256 hash of the record for the tamper-evident chain.
+    /// Hash input: record_id + "|" + timestamp_rfc3339 + "|" + previous_hash + "|" + action
+    fn compute_hash(&self, record: &AuditRecord) -> String {
+        use sha2::{Digest, Sha256};
+        let prev = self.chain_head.as_deref().unwrap_or("genesis");
+        let input = format!(
+            "{}|{}|{}|{:?}|{}",
+            record.record_id,
+            record.timestamp.to_rfc3339(),
+            prev,
+            record.action,
+            record.target.target_id,
+        );
+        let hash = Sha256::digest(input.as_bytes());
+        hex::encode(hash)
     }
 
     async fn persist_record(&self, record: &AuditRecord) -> anyhow::Result<()> {
-        // TODO: POST /v1/audit with record JSON
-        // Also write to structured local log for immediate durability
+        // Write structured JSON audit log line for immediate durability
+        // (GatewayForge API POST is best-effort; local log is the source of truth)
         tracing::info!(
             record_id = %record.record_id,
+            correlation_id = %record.correlation_id,
             agent = ?record.agent,
             action = ?record.action,
+            target_type = ?record.target.target_type,
             target_id = %record.target.target_id,
+            account_id = ?record.target.account_id,
+            record_hash = %record.record_hash,
             "AUDIT"
         );
+
+        // POST to GatewayForge API (non-fatal if unavailable)
+        let url = format!("{}/v1/audit", self.gf_api_base);
+        let client = reqwest::Client::new();
+        if let Err(e) = client
+            .post(&url)
+            .bearer_auth(&self.gf_api_key)
+            .json(record)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+        {
+            tracing::warn!("Failed to POST audit record to API (record still logged locally): {e}");
+        }
+
         Ok(())
     }
 }

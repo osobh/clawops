@@ -6,7 +6,7 @@
 //! Safety invariant: A user must ALWAYS have exactly one ACTIVE gateway.
 //! Failover must be atomic from the user's perspective.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
@@ -242,29 +242,70 @@ impl FailoverEngine {
         failed_id: &str,
         new_primary_id: &str,
     ) -> Result<()> {
-        // TODO: PATCH /v1/accounts/{account_id}/pairs
-        // { "primary_instance_id": new_primary_id, "standby_instance_id": null, status: "degraded" }
-        let _ = (account_id, failed_id, new_primary_id, &self.gf_api_key);
+        // PATCH /v1/accounts/{account_id}/pairs
+        // { "primary_instance_id": new_primary_id, "failed_instance_id": failed_id }
+        let url = format!("{}/v1/accounts/{}/pairs", self.gf_api_base, account_id);
+        reqwest::Client::new()
+            .patch(&url)
+            .bearer_auth(&self.gf_api_key)
+            .json(&serde_json::json!({
+                "primary_instance_id": new_primary_id,
+                "failed_instance_id": failed_id,
+                "status": "failover_complete",
+            }))
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+            .context("PATCH pair status request failed")?
+            .error_for_status()
+            .context("PATCH pair status returned error")?;
         Ok(())
     }
 
     async fn update_routing(&self, account_id: &str, new_primary_id: &str) -> Result<()> {
-        // TODO: update DNS record or load balancer to point user subdomain at new primary
+        // POST /v1/accounts/{account_id}/routing — update DNS/LB to new primary
         // This is the critical step that restores user access
-        let _ = (account_id, new_primary_id);
+        let url = format!("{}/v1/accounts/{}/routing", self.gf_api_base, account_id);
+        reqwest::Client::new()
+            .post(&url)
+            .bearer_auth(&self.gf_api_key)
+            .json(&serde_json::json!({
+                "primary_instance_id": new_primary_id,
+            }))
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+            .context("Routing update request failed")?
+            .error_for_status()
+            .context("Routing update returned error")?;
         Ok(())
     }
 
     async fn schedule_reprovision_standby(
         &self,
         account_id: &str,
-        _failed_instance_id: &str,
+        failed_instance_id: &str,
     ) -> Result<()> {
-        // TODO: POST /v1/provision-queue
-        // Queue a new standby provision for this account
+        // POST /v1/provision-queue — queue a new standby provision
         // Use original provider preference if that provider is healthy,
         // otherwise use next-best provider
-        let _ = account_id;
+        let url = format!("{}/v1/provision-queue", self.gf_api_base);
+        reqwest::Client::new()
+            .post(&url)
+            .bearer_auth(&self.gf_api_key)
+            .json(&serde_json::json!({
+                "account_id": account_id,
+                "role": "standby",
+                "reason": "failover_reprovision",
+                "failed_instance_id": failed_instance_id,
+                "priority": "high",
+            }))
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+            .context("Provision queue request failed")?
+            .error_for_status()
+            .context("Provision queue returned error")?;
         Ok(())
     }
 }

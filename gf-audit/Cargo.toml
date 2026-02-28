@@ -16,5 +16,8 @@ tracing.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+hex.workspace = true
 
 gf-node-proto = { path = "../gf-node-proto" }
