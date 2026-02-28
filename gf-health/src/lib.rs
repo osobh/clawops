@@ -175,10 +175,10 @@ pub struct HealStepResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HealOutcome {
-    Healed,          // docker restart fixed it
+    Healed, // docker restart fixed it
     FailoverTriggered,
     EscalatedToCommander,
-    Failed,          // could not heal, no standby
+    Failed, // could not heal, no standby
 }
 
 impl AutoHealEngine {
@@ -384,7 +384,8 @@ impl AutoHealEngine {
                 result: HealStepResult {
                     success: true,
                     recovered: false,
-                    details: "Commander notified. Awaiting instructions. No further action taken.".to_string(),
+                    details: "Commander notified. Awaiting instructions. No further action taken."
+                        .to_string(),
                 },
                 executed_at: Utc::now(),
                 duration_ms: 0,
@@ -458,9 +459,7 @@ impl FleetHealthSweeper {
             }
         }
         // Sort by severity (Critical first)
-        results.sort_by(|a, b| {
-            b.health_score.cmp(&a.health_score).reverse()
-        });
+        results.sort_by(|a, b| b.health_score.cmp(&a.health_score).reverse());
         results
     }
 
@@ -512,4 +511,131 @@ pub trait HealthEventSink: Send + Sync {
     async fn on_pair_failed(&self, primary_id: &str, standby_id: Option<&str>);
     async fn on_cost_anomaly(&self, actual_usd: f64, projected_usd: f64, deviation_pct: f32);
     async fn on_provider_degraded(&self, provider: &str, health_score: u8);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use gf_node_proto::{DockerStatus, ServiceStatus};
+
+    fn make_perfect_report() -> HealthReport {
+        HealthReport {
+            instance_id: "inst-001".to_string(),
+            health_score: 100,
+            openclaw_status: ServiceStatus::Healthy,
+            docker_status: DockerStatus {
+                running: true,
+                container_count: 2,
+                unhealthy_count: 0,
+            },
+            disk_usage_pct: 40.0,
+            cpu_usage_1m: 20.0,
+            mem_usage_pct: 30.0,
+            swap_usage_pct: 0.0,
+            load_avg_1m: 0.5,
+            load_avg_5m: 0.4,
+            load_avg_15m: 0.3,
+            uptime_seconds: 7200,
+            tailscale_latency_ms: Some(5),
+            last_heartbeat: Utc::now(),
+            openclaw_http_status: Some(200),
+            containers: vec![],
+        }
+    }
+
+    #[test]
+    fn health_thresholds_default_values() {
+        let thresholds = HealthThresholds::default();
+        assert_eq!(thresholds.heal_trigger_score, 50);
+        assert_eq!(thresholds.recovery_score, 70);
+        assert_eq!(thresholds.heartbeat_timeout_mins, 3);
+    }
+
+    #[test]
+    fn fleet_health_sweeper_new_uses_given_thresholds() {
+        let thresholds = HealthThresholds {
+            heal_trigger_score: 40,
+            recovery_score: 65,
+            heartbeat_timeout_mins: 5,
+            disk_warn_pct: 75.0,
+            disk_critical_pct: 88.0,
+            cpu_warn_pct: 85.0,
+            mem_warn_pct: 85.0,
+        };
+        let sweeper = FleetHealthSweeper::new(thresholds.clone());
+        assert_eq!(sweeper.thresholds.heal_trigger_score, 40);
+        assert_eq!(sweeper.thresholds.recovery_score, 65);
+    }
+
+    #[test]
+    fn compute_score_perfect_report_returns_100() {
+        let report = make_perfect_report();
+        let score = FleetHealthSweeper::compute_score(&report);
+        assert_eq!(score, 100);
+    }
+
+    #[test]
+    fn compute_score_openclaw_down_returns_60() {
+        let mut report = make_perfect_report();
+        report.openclaw_status = ServiceStatus::Down;
+        let score = FleetHealthSweeper::compute_score(&report);
+        // 100 - 40 (openclaw not healthy) = 60
+        assert_eq!(score, 60);
+    }
+
+    #[test]
+    fn compute_score_openclaw_down_plus_one_unhealthy_container_returns_40() {
+        let mut report = make_perfect_report();
+        report.openclaw_status = ServiceStatus::Down;
+        report.docker_status.unhealthy_count = 1;
+        let score = FleetHealthSweeper::compute_score(&report);
+        // 100 - 40 (openclaw) - 20 * 1 (unhealthy container) = 40
+        assert_eq!(score, 40);
+    }
+
+    #[test]
+    fn compute_score_disk_above_90_subtracts_15() {
+        let mut report = make_perfect_report();
+        report.disk_usage_pct = 91.0;
+        let score = FleetHealthSweeper::compute_score(&report);
+        // 100 - 15 (disk > 90%) = 85
+        assert_eq!(score, 85);
+    }
+
+    #[test]
+    fn health_check_result_serializes_healthy_status() {
+        let result = HealthCheckResult {
+            instance_id: "inst-test".to_string(),
+            checked_at: Utc::now(),
+            health_score: 95,
+            status: InstanceHealthStatus::Healthy,
+            alerts: vec![],
+            recommended_action: RecommendedAction::None,
+        };
+
+        let json = serde_json::to_string(&result).expect("HealthCheckResult serialization failed");
+        assert!(
+            json.contains("HEALTHY"),
+            "InstanceHealthStatus::Healthy should serialize as HEALTHY"
+        );
+
+        let decoded: HealthCheckResult =
+            serde_json::from_str(&json).expect("HealthCheckResult deserialization failed");
+        assert_eq!(decoded.status, InstanceHealthStatus::Healthy);
+        assert_eq!(decoded.instance_id, "inst-test");
+    }
+
+    #[test]
+    fn instance_health_status_healthy_ne_critical() {
+        assert_ne!(
+            InstanceHealthStatus::Healthy,
+            InstanceHealthStatus::Critical
+        );
+        assert_eq!(InstanceHealthStatus::Healthy, InstanceHealthStatus::Healthy);
+        assert_ne!(
+            InstanceHealthStatus::Degraded,
+            InstanceHealthStatus::Unknown
+        );
+    }
 }

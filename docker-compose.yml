@@ -1,0 +1,80 @@
+version: '3.9'
+
+# ClawOps local development environment
+# Usage: docker compose up -d
+# Requires: .env file with GF_API_KEY, INSTANCE_ID, GATEWAY_URL
+
+services:
+  # ─── gf-clawnode: VPS instance agent ───────────────────────────────────────
+  clawnode:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gf-clawnode-dev
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      INSTANCE_ID: ${INSTANCE_ID:-dev-instance-001}
+      GATEWAY_URL: ${GATEWAY_URL:-ws://host.docker.internal:8443}
+      GF_API_KEY: ${GF_API_KEY:-dev-api-key}
+      GF_API_BASE: ${GF_API_BASE:-https://api.gatewayforge.io}
+      NODE_PROVIDER: ${NODE_PROVIDER:-hetzner}
+      NODE_REGION: ${NODE_REGION:-eu-hetzner-nbg1}
+      NODE_TIER: ${NODE_TIER:-standard}
+      NODE_ROLE: ${NODE_ROLE:-primary}
+      ACCOUNT_ID: ${ACCOUNT_ID:-dev-account}
+      HEARTBEAT_INTERVAL_SECS: ${HEARTBEAT_INTERVAL_SECS:-30}
+      METRICS_INTERVAL_SECS: ${METRICS_INTERVAL_SECS:-60}
+      RUST_LOG: ${RUST_LOG:-gf_clawnode=debug,gf_health=debug,gf_metrics=info,gf_audit=info}
+    volumes:
+      - clawnode-config:/etc/gf-clawnode
+      - clawnode-logs:/var/log/gf-clawnode
+    networks:
+      - clawops-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8090/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ─── Redis: state store for clawnode ───────────────────────────────────────
+  # Used for: heartbeat deduplication, command queue, metrics ring buffer
+  redis:
+    image: redis:7-alpine
+    container_name: gf-redis-dev
+    restart: unless-stopped
+    command: redis-server --save 60 1 --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    networks:
+      - clawops-net
+    ports:
+      - "127.0.0.1:6379:6379"  # Bind only to localhost for security
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  clawnode-config:
+    driver: local
+  clawnode-logs:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  clawops-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

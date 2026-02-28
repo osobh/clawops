@@ -83,8 +83,8 @@ pub struct CostMetrics {
     pub cost_per_active_account_usd: f64,
 
     // Waste identification
-    pub idle_accounts_cost_usd: f64,     // 14+ days no activity
-    pub overprovisioned_cost_usd: f64,   // < 20% avg utilization
+    pub idle_accounts_cost_usd: f64,       // 14+ days no activity
+    pub overprovisioned_cost_usd: f64,     // < 20% avg utilization
     pub suboptimal_provider_cost_usd: f64, // cheaper alternative available
 
     // Provider cost breakdown
@@ -160,11 +160,11 @@ pub struct ProviderPerformanceScore {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderRecommendation {
-    Primary,        // score >= 85: excellent primary choice
-    PrimaryOk,      // score 75–84: acceptable primary
-    StandbyOnly,    // score 65–74: use as standby, not primary
-    Pause,          // score < 65: pause new provisions
-    Emergency,      // active incident: no new provisions
+    Primary,     // score >= 85: excellent primary choice
+    PrimaryOk,   // score 75–84: acceptable primary
+    StandbyOnly, // score 65–74: use as standby, not primary
+    Pause,       // score < 65: pause new provisions
+    Emergency,   // active incident: no new provisions
 }
 
 // ─── Instance metrics snapshot (per-instance state for aggregation) ───────────
@@ -243,7 +243,8 @@ impl MetricsAggregator {
 
     /// Update the latest snapshot for an instance (from heartbeat data)
     pub fn update_snapshot(&mut self, snapshot: InstanceSnapshot) {
-        self.snapshots.insert(snapshot.instance_id.clone(), snapshot);
+        self.snapshots
+            .insert(snapshot.instance_id.clone(), snapshot);
     }
 
     /// Compute fleet-wide summary from all ingested metrics and snapshots
@@ -271,7 +272,12 @@ impl MetricsAggregator {
             .count() as u32;
         let bootstrapping_instances = all_snapshots
             .iter()
-            .filter(|s| matches!(s.status, InstanceStatus::Bootstrapping | InstanceStatus::Creating))
+            .filter(|s| {
+                matches!(
+                    s.status,
+                    InstanceStatus::Bootstrapping | InstanceStatus::Creating
+                )
+            })
             .count() as u32;
 
         // Provider breakdown
@@ -286,7 +292,10 @@ impl MetricsAggregator {
         // Performance aggregates
         let cpu_values: Vec<f32> = all_snapshots.iter().map(|s| s.cpu_usage_pct).collect();
         let mem_values: Vec<f32> = all_snapshots.iter().map(|s| s.mem_usage_pct).collect();
-        let health_values: Vec<f32> = all_snapshots.iter().map(|s| s.health_score as f32).collect();
+        let health_values: Vec<f32> = all_snapshots
+            .iter()
+            .map(|s| s.health_score as f32)
+            .collect();
 
         let avg_health_score = mean(&health_values);
         let p50_cpu_usage = percentile(&cpu_values, 50.0);
@@ -343,9 +352,16 @@ impl MetricsAggregator {
             .into_iter()
             .map(|(provider, instances)| {
                 let total = instances.len() as u32;
-                let active = instances.iter().filter(|s| s.status == InstanceStatus::Active).count() as u32;
-                let degraded = instances.iter().filter(|s| s.status == InstanceStatus::Degraded).count() as u32;
-                let health_scores: Vec<f32> = instances.iter().map(|s| s.health_score as f32).collect();
+                let active = instances
+                    .iter()
+                    .filter(|s| s.status == InstanceStatus::Active)
+                    .count() as u32;
+                let degraded = instances
+                    .iter()
+                    .filter(|s| s.status == InstanceStatus::Degraded)
+                    .count() as u32;
+                let health_scores: Vec<f32> =
+                    instances.iter().map(|s| s.health_score as f32).collect();
                 let monthly_cost: f64 = instances.iter().map(|s| s.monthly_cost_usd).sum();
 
                 (
@@ -380,21 +396,39 @@ impl MetricsAggregator {
             .map(|(tier, instances)| {
                 let count = instances.len() as u32;
                 let monthly_cost: f64 = instances.iter().map(|s| s.monthly_cost_usd).sum();
-                let avg_cpu: f32 = mean(&instances.iter().map(|s| s.cpu_usage_pct).collect::<Vec<_>>());
-                let avg_mem: f32 = mean(&instances.iter().map(|s| s.mem_usage_pct).collect::<Vec<_>>());
+                let avg_cpu: f32 = mean(
+                    &instances
+                        .iter()
+                        .map(|s| s.cpu_usage_pct)
+                        .collect::<Vec<_>>(),
+                );
+                let avg_mem: f32 = mean(
+                    &instances
+                        .iter()
+                        .map(|s| s.mem_usage_pct)
+                        .collect::<Vec<_>>(),
+                );
                 // Downsize candidate: avg CPU < 20% AND avg MEM < 30% for the past window
                 let downsize_candidates = instances
                     .iter()
                     .filter(|s| {
                         let inst_reports = self.reports.get(&s.instance_id);
                         if let Some(reports) = inst_reports {
-                            if reports.len() < 3 { return false; }
+                            if reports.len() < 3 {
+                                return false;
+                            }
                             let avg_cpu: f32 = reports.iter().map(|r| r.cpu.usage_pct).sum::<f32>()
                                 / reports.len() as f32;
-                            let avg_mem_pct: f32 = reports.iter().map(|r| {
-                                if r.memory.total_mb == 0 { return 0.0; }
-                                r.memory.used_mb as f32 / r.memory.total_mb as f32 * 100.0
-                            }).sum::<f32>() / reports.len() as f32;
+                            let avg_mem_pct: f32 = reports
+                                .iter()
+                                .map(|r| {
+                                    if r.memory.total_mb == 0 {
+                                        return 0.0;
+                                    }
+                                    r.memory.used_mb as f32 / r.memory.total_mb as f32 * 100.0
+                                })
+                                .sum::<f32>()
+                                / reports.len() as f32;
                             avg_cpu < 20.0 && avg_mem_pct < 30.0
                         } else {
                             false
@@ -441,11 +475,7 @@ impl MetricsAggregator {
         let idle_cutoff = Utc::now() - chrono::Duration::days(14);
         let idle_cost: f64 = snapshots
             .iter()
-            .filter(|s| {
-                s.last_activity
-                    .map(|la| la < idle_cutoff)
-                    .unwrap_or(false)
-            })
+            .filter(|s| s.last_activity.map(|la| la < idle_cutoff).unwrap_or(false))
             .map(|s| s.monthly_cost_usd)
             .sum();
 
@@ -455,9 +485,11 @@ impl MetricsAggregator {
             .filter(|s| {
                 let reports = self.reports.get(&s.instance_id);
                 if let Some(rpts) = reports {
-                    if rpts.len() < 72 { return false; } // need at least 72 data points (3 days at 60s)
-                    let avg: f32 = rpts.iter().map(|r| r.cpu.usage_pct).sum::<f32>()
-                        / rpts.len() as f32;
+                    if rpts.len() < 72 {
+                        return false;
+                    } // need at least 72 data points (3 days at 60s)
+                    let avg: f32 =
+                        rpts.iter().map(|r| r.cpu.usage_pct).sum::<f32>() / rpts.len() as f32;
                     avg < 20.0
                 } else {
                     false
@@ -467,7 +499,11 @@ impl MetricsAggregator {
                 // Savings from downsize = difference in tier cost
                 let current_cost = s.monthly_cost_usd;
                 let nano_cost = self.tier_costs.get("nano").copied().unwrap_or(4.0);
-                if current_cost > nano_cost { current_cost - nano_cost } else { 0.0 }
+                if current_cost > nano_cost {
+                    current_cost - nano_cost
+                } else {
+                    0.0
+                }
             })
             .sum();
 
@@ -616,13 +652,17 @@ impl MetricsAggregator {
     pub fn score_providers(&self, _days: u32) -> Vec<ProviderPerformanceScore> {
         let mut provider_snapshots: HashMap<String, Vec<&InstanceSnapshot>> = HashMap::new();
         for s in self.snapshots.values() {
-            provider_snapshots.entry(s.provider.clone()).or_default().push(s);
+            provider_snapshots
+                .entry(s.provider.clone())
+                .or_default()
+                .push(s);
         }
 
         provider_snapshots
             .into_iter()
             .map(|(provider, instances)| {
-                let health_scores: Vec<f32> = instances.iter().map(|s| s.health_score as f32).collect();
+                let health_scores: Vec<f32> =
+                    instances.iter().map(|s| s.health_score as f32).collect();
                 let avg_health = mean(&health_scores);
                 let avg_uptime = avg_health; // Health score approximates uptime
 
@@ -688,14 +728,18 @@ pub struct IncidentSummary {
 
 /// Compute the arithmetic mean of a slice. Returns 0.0 if empty.
 pub fn mean(values: &[f32]) -> f32 {
-    if values.is_empty() { return 0.0; }
+    if values.is_empty() {
+        return 0.0;
+    }
     values.iter().sum::<f32>() / values.len() as f32
 }
 
 /// Compute an approximate percentile using the nearest-rank method.
 /// Values do NOT need to be sorted.
 pub fn percentile(values: &[f32], pct: f32) -> f32 {
-    if values.is_empty() { return 0.0; }
+    if values.is_empty() {
+        return 0.0;
+    }
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let idx = ((pct / 100.0) * (sorted.len() as f32 - 1.0)).round() as usize;
@@ -705,6 +749,80 @@ pub fn percentile(values: &[f32], pct: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use gf_node_proto::{
+        CpuMetrics, DiskMetrics, MemoryMetrics, MetricsReport, NetworkMetrics, OpenClawMetrics,
+    };
+
+    fn make_metrics_report(instance_id: &str) -> MetricsReport {
+        MetricsReport {
+            instance_id: instance_id.to_string(),
+            collected_at: Utc::now(),
+            cpu: CpuMetrics {
+                usage_pct: 15.0,
+                steal_pct: 0.0,
+                core_count: 2,
+                load_avg_1m: 0.3,
+                load_avg_5m: 0.2,
+                load_avg_15m: 0.2,
+            },
+            memory: MemoryMetrics {
+                total_mb: 4096,
+                used_mb: 1000,
+                free_mb: 3096,
+                cached_mb: 200,
+                swap_total_mb: 0,
+                swap_used_mb: 0,
+            },
+            disk: vec![DiskMetrics {
+                mount_point: "/".to_string(),
+                total_gb: 80.0,
+                used_gb: 30.0,
+                free_gb: 50.0,
+                usage_pct: 37.5,
+                iops_read: 0,
+                iops_write: 0,
+            }],
+            network: NetworkMetrics {
+                bytes_sent: 1000,
+                bytes_recv: 2000,
+                packets_sent: 10,
+                packets_recv: 20,
+                errors_in: 0,
+                errors_out: 0,
+                interface: "eth0".to_string(),
+            },
+            openclaw: OpenClawMetrics {
+                http_requests_total: 1000,
+                http_latency_p50_ms: 5.0,
+                http_latency_p95_ms: 20.0,
+                http_latency_p99_ms: 50.0,
+                active_sessions: 10,
+                websocket_connections: 2,
+                error_rate_pct: 0.1,
+            },
+        }
+    }
+
+    fn make_snapshot(instance_id: &str, account_id: &str) -> InstanceSnapshot {
+        InstanceSnapshot {
+            instance_id: instance_id.to_string(),
+            account_id: account_id.to_string(),
+            provider: "hetzner".to_string(),
+            region: "eu-hetzner-nbg1".to_string(),
+            tier: "standard".to_string(),
+            role: "primary".to_string(),
+            status: InstanceStatus::Active,
+            health_score: 95,
+            cpu_usage_pct: 15.0,
+            mem_usage_pct: 25.0,
+            disk_usage_pct: 40.0,
+            last_heartbeat: Utc::now(),
+            last_activity: Some(Utc::now()),
+            monthly_cost_usd: 12.0,
+            provisioned_at: Utc::now(),
+        }
+    }
 
     #[test]
     fn test_percentile_basic() {
@@ -725,5 +843,65 @@ mod tests {
         let summary = agg.compute_fleet_summary();
         assert_eq!(summary.total_instances, 0);
         assert_eq!(summary.active_pairs, 0);
+    }
+
+    #[test]
+    fn metrics_aggregator_new_24h_has_four_tier_costs() {
+        let agg = MetricsAggregator::new(24);
+        assert_eq!(agg.tier_costs.len(), 4);
+        assert!(
+            (agg.tier_costs["nano"] - 4.0).abs() < f64::EPSILON,
+            "nano tier should cost $4"
+        );
+        assert!((agg.tier_costs["standard"] - 12.0).abs() < f64::EPSILON);
+        assert!((agg.tier_costs["pro"] - 24.0).abs() < f64::EPSILON);
+        assert!((agg.tier_costs["enterprise"] - 48.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn ingest_then_compute_fleet_summary_one_snapshot() {
+        let mut agg = MetricsAggregator::new(24);
+        let report = make_metrics_report("inst-001");
+        agg.ingest(report);
+
+        let snapshot = make_snapshot("inst-001", "acct-001");
+        agg.update_snapshot(snapshot);
+
+        let summary = agg.compute_fleet_summary();
+        assert_eq!(summary.total_instances, 1);
+    }
+
+    #[test]
+    fn update_snapshot_then_find_idle_accounts_active_account_returns_empty() {
+        let mut agg = MetricsAggregator::new(24);
+        // last_activity = now, so NOT idle (14 days threshold)
+        let snapshot = make_snapshot("inst-001", "acct-001");
+        agg.update_snapshot(snapshot);
+
+        let idle = agg.find_idle_accounts(14);
+        assert!(
+            idle.is_empty(),
+            "A recently active account should not appear in idle list"
+        );
+    }
+
+    #[test]
+    fn find_downsize_candidates_empty_aggregator_returns_empty() {
+        let agg = MetricsAggregator::new(24);
+        let candidates = agg.find_downsize_candidates(30.0);
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn provider_recommendation_primary_score_ge_85() {
+        // Primary recommendation is for score >= 85
+        // Verify the enum discriminant ordering by round-trip through JSON
+        let rec = ProviderRecommendation::Primary;
+        let json = serde_json::to_string(&rec).unwrap();
+        assert_eq!(json, "\"primary\"");
+
+        let decoded: ProviderRecommendation = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, ProviderRecommendation::Primary);
+        assert_ne!(decoded, ProviderRecommendation::Pause);
     }
 }

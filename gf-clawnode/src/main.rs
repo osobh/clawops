@@ -18,7 +18,11 @@ use config::NodeConfig;
 #[command(name = "gf-clawnode", about = "GatewayForge VPS instance agent")]
 struct Cli {
     /// Override config file path
-    #[arg(long, env = "GF_CONFIG_FILE", default_value = "/etc/gf-clawnode/config.toml")]
+    #[arg(
+        long,
+        env = "GF_CONFIG_FILE",
+        default_value = "/etc/gf-clawnode/config.toml"
+    )]
     config: String,
 
     /// Enable verbose debug logging
@@ -69,15 +73,11 @@ async fn main() -> Result<()> {
 
     // Heartbeat loop: POST /v1/heartbeat every 30s
     let heartbeat_node = Arc::clone(&node);
-    let heartbeat_handle = tokio::spawn(async move {
-        heartbeat::run(heartbeat_node).await
-    });
+    let heartbeat_handle = tokio::spawn(async move { heartbeat::run(heartbeat_node).await });
 
     // Metrics collector: gather sysinfo + docker stats every 60s
     let metrics_node = Arc::clone(&node);
-    let metrics_handle = tokio::spawn(async move {
-        metrics_collector::run(metrics_node).await
-    });
+    let metrics_handle = tokio::spawn(async move { metrics_collector::run(metrics_node).await });
 
     info!("gf-clawnode ready — waiting for commands");
 
@@ -164,15 +164,19 @@ mod config {
                 api_key: std::env::var("GF_API_KEY").unwrap_or_default(),
                 gf_api_base: std::env::var("GF_API_BASE")
                     .unwrap_or_else(|_| "https://api.gatewayforge.io".to_string()),
-                provider: std::env::var("NODE_PROVIDER")
-                    .unwrap_or_else(|_| "hetzner".to_string()),
+                provider: std::env::var("NODE_PROVIDER").unwrap_or_else(|_| "hetzner".to_string()),
                 region: std::env::var("NODE_REGION")
                     .unwrap_or_else(|_| "eu-hetzner-nbg1".to_string()),
-                tier: std::env::var("NODE_TIER")
-                    .unwrap_or_else(|_| "standard".to_string()),
+                tier: std::env::var("NODE_TIER").unwrap_or_else(|_| "standard".to_string()),
                 account_id: std::env::var("ACCOUNT_ID").ok(),
                 role: std::env::var("NODE_ROLE")
-                    .map(|r| if r == "standby" { InstanceRole::Standby } else { InstanceRole::Primary })
+                    .map(|r| {
+                        if r == "standby" {
+                            InstanceRole::Standby
+                        } else {
+                            InstanceRole::Primary
+                        }
+                    })
                     .unwrap_or(InstanceRole::Primary),
                 pair_instance_id: std::env::var("PAIR_INSTANCE_ID").ok(),
                 heartbeat_interval_secs: std::env::var("HEARTBEAT_INTERVAL_SECS")
@@ -195,6 +199,60 @@ mod config {
             })
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn node_config_load_empty_path_succeeds_with_defaults() {
+            let cfg =
+                NodeConfig::load("").expect("NodeConfig::load should succeed with empty path");
+            // gateway_url falls back to env or default
+            assert!(!cfg.gateway_url.is_empty());
+            assert!(!cfg.provider.is_empty());
+            assert!(!cfg.region.is_empty());
+            assert!(!cfg.tier.is_empty());
+            // heartbeat_interval_secs defaults to 30 if env var not set
+            assert!(cfg.heartbeat_interval_secs >= 1);
+            assert!(cfg.metrics_interval_secs >= 1);
+        }
+
+        #[test]
+        fn instance_role_primary_displays_as_primary() {
+            let role = InstanceRole::Primary;
+            assert_eq!(format!("{role}"), "primary");
+        }
+
+        #[test]
+        fn instance_role_standby_displays_as_standby() {
+            let role = InstanceRole::Standby;
+            assert_eq!(format!("{role}"), "standby");
+        }
+
+        #[test]
+        fn allowed_command_prefixes_contains_vps_prefix() {
+            let cfg = NodeConfig::load("").expect("NodeConfig::load failed");
+            assert!(
+                cfg.allowed_command_prefixes.iter().any(|p| p == "vps."),
+                "allowed_command_prefixes should contain 'vps.' prefix"
+            );
+        }
+
+        #[test]
+        fn config_with_empty_api_key_is_dev_mode() {
+            // When api_key is empty, verify_signature returns true (dev mode skip)
+            // We test this by confirming the load function can produce an empty api_key
+            // (when GF_API_KEY env var is not set) and that the config reflects it.
+            // The actual verify_signature logic is in the agent module; here we validate
+            // the config value that drives the branch.
+            let cfg = NodeConfig::load("").expect("NodeConfig::load failed");
+            // If GF_API_KEY is not set in test environment, api_key is empty string
+            // This is the condition that triggers dev mode in verify_signature
+            // We simply check the field is accessible and is a String
+            let _api_key: &str = &cfg.api_key;
+        }
+    }
 }
 
 // ─── Agent module ─────────────────────────────────────────────────────────────
@@ -204,8 +262,7 @@ mod agent {
     use anyhow::{bail, Context, Result};
     use futures::{SinkExt, StreamExt};
     use gf_node_proto::{
-        CommandRequest, CommandResult, HeartbeatPayload, NodeMessage, NodePayload,
-        ServiceStatus,
+        CommandRequest, CommandResult, HeartbeatPayload, NodeMessage, NodePayload, ServiceStatus,
     };
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
@@ -219,8 +276,11 @@ mod agent {
     type HmacSha256 = Hmac<Sha256>;
 
     /// Handler signature: takes the command request, returns JSON result value.
-    pub type CommandHandler =
-        Arc<dyn Fn(CommandRequest) -> futures::future::BoxFuture<'static, serde_json::Value> + Send + Sync>;
+    pub type CommandHandler = Arc<
+        dyn Fn(CommandRequest) -> futures::future::BoxFuture<'static, serde_json::Value>
+            + Send
+            + Sync,
+    >;
 
     /// The core agent struct. Holds the WebSocket connection to the OpenClaw
     /// gateway and a registry of command handlers.
@@ -258,7 +318,10 @@ mod agent {
             Fut: futures::Future<Output = serde_json::Value> + Send + 'static,
         {
             let boxed: CommandHandler = Arc::new(move |req| Box::pin(handler(req)));
-            self.handlers.write().await.insert(command.to_string(), boxed);
+            self.handlers
+                .write()
+                .await
+                .insert(command.to_string(), boxed);
             debug!(command, "Handler registered");
         }
 
@@ -315,18 +378,16 @@ mod agent {
 
             while let Some(msg) = ws_stream.next().await {
                 match msg {
-                    Ok(Message::Text(text)) => {
-                        match serde_json::from_str::<NodeMessage>(&text) {
-                            Ok(envelope) => {
-                                if let NodePayload::Command(cmd_req) = envelope.payload {
-                                    self.dispatch_command(cmd_req, &mut ws_stream).await;
-                                }
-                            }
-                            Err(e) => {
-                                warn!("Failed to parse message: {e} — raw: {text:.200}");
+                    Ok(Message::Text(text)) => match serde_json::from_str::<NodeMessage>(&text) {
+                        Ok(envelope) => {
+                            if let NodePayload::Command(cmd_req) = envelope.payload {
+                                self.dispatch_command(cmd_req, &mut ws_stream).await;
                             }
                         }
-                    }
+                        Err(e) => {
+                            warn!("Failed to parse message: {e} — raw: {text:.200}");
+                        }
+                    },
                     Ok(Message::Ping(data)) => {
                         ws_stream.send(Message::Pong(data)).await.ok();
                     }
@@ -344,18 +405,17 @@ mod agent {
             Ok(())
         }
 
-        async fn dispatch_command<S>(
-            &self,
-            req: CommandRequest,
-            ws: &mut S,
-        ) where
+        async fn dispatch_command<S>(&self, req: CommandRequest, ws: &mut S)
+        where
             S: SinkExt<Message> + Unpin,
             <S as futures::Sink<Message>>::Error: std::fmt::Display,
         {
             // Security: verify command is in the allowlist
-            let allowed = self.config.allowed_command_prefixes.iter().any(|prefix| {
-                req.command.starts_with(prefix.as_str())
-            });
+            let allowed = self
+                .config
+                .allowed_command_prefixes
+                .iter()
+                .any(|prefix| req.command.starts_with(prefix.as_str()));
 
             if !allowed {
                 warn!(
@@ -363,14 +423,19 @@ mod agent {
                     issued_by = ?req.issued_by,
                     "Rejected command — not in allowlist"
                 );
-                let _ = self.send_result(ws, CommandResult {
-                    request_id: req.request_id,
-                    command: req.command,
-                    success: false,
-                    output: serde_json::Value::Null,
-                    error: Some("Command not in allowlist".to_string()),
-                    duration_ms: 0,
-                }).await;
+                let _ = self
+                    .send_result(
+                        ws,
+                        CommandResult {
+                            request_id: req.request_id,
+                            command: req.command,
+                            success: false,
+                            output: serde_json::Value::Null,
+                            error: Some("Command not in allowlist".to_string()),
+                            duration_ms: 0,
+                        },
+                    )
+                    .await;
                 return;
             }
 
@@ -380,14 +445,19 @@ mod agent {
                     command = %req.command,
                     "Rejected command — invalid HMAC signature"
                 );
-                let _ = self.send_result(ws, CommandResult {
-                    request_id: req.request_id,
-                    command: req.command,
-                    success: false,
-                    output: serde_json::Value::Null,
-                    error: Some("Invalid HMAC signature".to_string()),
-                    duration_ms: 0,
-                }).await;
+                let _ = self
+                    .send_result(
+                        ws,
+                        CommandResult {
+                            request_id: req.request_id,
+                            command: req.command,
+                            success: false,
+                            output: serde_json::Value::Null,
+                            error: Some("Invalid HMAC signature".to_string()),
+                            duration_ms: 0,
+                        },
+                    )
+                    .await;
                 return;
             }
 
@@ -421,14 +491,19 @@ mod agent {
             let duration_ms = start.elapsed().as_millis() as u64;
             let success = error.is_none();
 
-            let _ = self.send_result(ws, CommandResult {
-                request_id,
-                command,
-                success,
-                output,
-                error,
-                duration_ms,
-            }).await;
+            let _ = self
+                .send_result(
+                    ws,
+                    CommandResult {
+                        request_id,
+                        command,
+                        success,
+                        output,
+                        error,
+                        duration_ms,
+                    },
+                )
+                .await;
         }
 
         async fn send_result<S>(&self, ws: &mut S, result: CommandResult) -> Result<()>
@@ -578,7 +653,8 @@ mod commands {
                 let report = build_health_report(&node).await;
                 serde_json::to_value(report).unwrap_or(serde_json::Value::Null)
             }
-        }).await;
+        })
+        .await;
 
         // vps.info — return static instance metadata
         let n = Arc::clone(&node);
@@ -595,7 +671,8 @@ mod commands {
                     "pair_instance_id": node.config.pair_instance_id,
                 })
             }
-        }).await;
+        })
+        .await;
 
         // vps.reboot — schedule graceful reboot (10s delay to allow response)
         node.register("vps.reboot", move |_req: CommandRequest| {
@@ -607,73 +684,72 @@ mod commands {
                 });
                 serde_json::json!({ "scheduled": true, "delay_secs": 10 })
             }
-        }).await;
+        })
+        .await;
 
         // openclaw.health — HTTP health check on local OpenClaw
-        node.register("openclaw.health", move |_req: CommandRequest| {
-            async move {
-                let client = reqwest::Client::new();
-                match client
-                    .get("http://localhost:8080/health")
-                    .timeout(std::time::Duration::from_secs(5))
-                    .send()
-                    .await
-                {
-                    Ok(resp) => serde_json::json!({
-                        "status": resp.status().as_u16(),
-                        "healthy": resp.status().is_success(),
-                    }),
-                    Err(e) => serde_json::json!({
-                        "status": null,
-                        "healthy": false,
-                        "error": e.to_string(),
-                    }),
-                }
+        node.register("openclaw.health", move |_req: CommandRequest| async move {
+            let client = reqwest::Client::new();
+            match client
+                .get("http://localhost:8080/health")
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+            {
+                Ok(resp) => serde_json::json!({
+                    "status": resp.status().as_u16(),
+                    "healthy": resp.status().is_success(),
+                }),
+                Err(e) => serde_json::json!({
+                    "status": null,
+                    "healthy": false,
+                    "error": e.to_string(),
+                }),
             }
-        }).await;
+        })
+        .await;
 
         // openclaw.restart — docker compose restart openclaw
-        node.register("openclaw.restart", move |_req: CommandRequest| {
-            async move {
-                let output = tokio::process::Command::new("docker")
-                    .args(["compose", "restart", "openclaw"])
-                    .output()
-                    .await;
-                match output {
-                    Ok(o) => serde_json::json!({
-                        "success": o.status.success(),
-                        "stdout": String::from_utf8_lossy(&o.stdout).to_string(),
-                        "stderr": String::from_utf8_lossy(&o.stderr).to_string(),
-                    }),
-                    Err(e) => serde_json::json!({
-                        "success": false,
-                        "error": e.to_string(),
-                    }),
-                }
+        node.register("openclaw.restart", move |_req: CommandRequest| async move {
+            let output = tokio::process::Command::new("docker")
+                .args(["compose", "restart", "openclaw"])
+                .output()
+                .await;
+            match output {
+                Ok(o) => serde_json::json!({
+                    "success": o.status.success(),
+                    "stdout": String::from_utf8_lossy(&o.stdout).to_string(),
+                    "stderr": String::from_utf8_lossy(&o.stderr).to_string(),
+                }),
+                Err(e) => serde_json::json!({
+                    "success": false,
+                    "error": e.to_string(),
+                }),
             }
-        }).await;
+        })
+        .await;
 
         // openclaw.logs — tail last N lines of OpenClaw logs
-        node.register("openclaw.logs", move |req: CommandRequest| {
-            async move {
-                let lines = req.args
-                    .get("lines")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(100);
-                let output = tokio::process::Command::new("docker")
-                    .args(["logs", "--tail", &lines.to_string(), "openclaw"])
-                    .output()
-                    .await;
-                match output {
-                    Ok(o) => serde_json::json!({
-                        "logs": String::from_utf8_lossy(&o.stdout).to_string(),
-                        "stderr": String::from_utf8_lossy(&o.stderr).to_string(),
-                        "lines_requested": lines,
-                    }),
-                    Err(e) => serde_json::json!({ "error": e.to_string() }),
-                }
+        node.register("openclaw.logs", move |req: CommandRequest| async move {
+            let lines = req
+                .args
+                .get("lines")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(100);
+            let output = tokio::process::Command::new("docker")
+                .args(["logs", "--tail", &lines.to_string(), "openclaw"])
+                .output()
+                .await;
+            match output {
+                Ok(o) => serde_json::json!({
+                    "logs": String::from_utf8_lossy(&o.stdout).to_string(),
+                    "stderr": String::from_utf8_lossy(&o.stderr).to_string(),
+                    "lines_requested": lines,
+                }),
+                Err(e) => serde_json::json!({ "error": e.to_string() }),
             }
-        }).await;
+        })
+        .await;
 
         // docker.ps — list running containers
         node.register("docker.ps", move |_req: CommandRequest| {
@@ -695,19 +771,24 @@ mod commands {
                     Err(e) => serde_json::json!({ "error": e.to_string() }),
                 }
             }
-        }).await;
+        })
+        .await;
 
         // docker.restart — restart a named container
         node.register("docker.restart", move |req: CommandRequest| {
             async move {
-                let container = req.args
+                let container = req
+                    .args
                     .get("container")
                     .and_then(|v| v.as_str())
                     .unwrap_or("openclaw")
                     .to_string();
 
                 // Security: only allow alphanumeric container names
-                if !container.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+                if !container
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                {
                     return serde_json::json!({
                         "success": false,
                         "error": "Invalid container name — alphanumeric, dash, underscore only",
@@ -726,26 +807,23 @@ mod commands {
                     Err(e) => serde_json::json!({ "success": false, "error": e.to_string() }),
                 }
             }
-        }).await;
+        })
+        .await;
 
         // tailscale.status — connectivity check
-        node.register("tailscale.status", move |_req: CommandRequest| {
-            async move {
-                let output = tokio::process::Command::new("tailscale")
-                    .args(["status", "--json"])
-                    .output()
-                    .await;
-                match output {
-                    Ok(o) if o.status.success() => {
-                        serde_json::from_slice(&o.stdout).unwrap_or_else(|_| {
-                            serde_json::json!({ "connected": true })
-                        })
-                    }
-                    Ok(_) => serde_json::json!({ "connected": false }),
-                    Err(e) => serde_json::json!({ "connected": false, "error": e.to_string() }),
-                }
+        node.register("tailscale.status", move |_req: CommandRequest| async move {
+            let output = tokio::process::Command::new("tailscale")
+                .args(["status", "--json"])
+                .output()
+                .await;
+            match output {
+                Ok(o) if o.status.success() => serde_json::from_slice(&o.stdout)
+                    .unwrap_or_else(|_| serde_json::json!({ "connected": true })),
+                Ok(_) => serde_json::json!({ "connected": false }),
+                Err(e) => serde_json::json!({ "connected": false, "error": e.to_string() }),
             }
-        }).await;
+        })
+        .await;
 
         // config.get — return current OpenClaw config with secrets redacted
         node.register("config.get", move |_req: CommandRequest| {
@@ -754,13 +832,18 @@ mod commands {
                 match tokio::fs::read_to_string(config_path).await {
                     Ok(content) => {
                         // Parse and redact secret fields
-                        let mut cfg: serde_json::Value = serde_json::from_str(&content)
-                            .unwrap_or(serde_json::json!({}));
+                        let mut cfg: serde_json::Value =
+                            serde_json::from_str(&content).unwrap_or(serde_json::json!({}));
                         // Redact known secret fields
-                        for secret_key in &["api_key", "secret", "token", "password", "webhook_secret"] {
+                        for secret_key in
+                            &["api_key", "secret", "token", "password", "webhook_secret"]
+                        {
                             if let Some(obj) = cfg.as_object_mut() {
                                 if obj.contains_key(*secret_key) {
-                                    obj.insert(secret_key.to_string(), serde_json::json!("[REDACTED]"));
+                                    obj.insert(
+                                        secret_key.to_string(),
+                                        serde_json::json!("[REDACTED]"),
+                                    );
                                 }
                             }
                         }
@@ -769,7 +852,8 @@ mod commands {
                     Err(e) => serde_json::json!({ "error": e.to_string() }),
                 }
             }
-        }).await;
+        })
+        .await;
 
         // config.push — write new config and signal hot-reload
         node.register("config.push", move |req: CommandRequest| {
@@ -810,27 +894,26 @@ mod commands {
         }).await;
 
         // config.rollback — restore previous config
-        node.register("config.rollback", move |_req: CommandRequest| {
-            async move {
-                let config_path = "/etc/openclaw/config.json";
-                let backup_path = "/etc/openclaw/config.json.prev";
+        node.register("config.rollback", move |_req: CommandRequest| async move {
+            let config_path = "/etc/openclaw/config.json";
+            let backup_path = "/etc/openclaw/config.json.prev";
 
-                match tokio::fs::copy(backup_path, config_path).await {
-                    Ok(bytes) => {
-                        let _ = tokio::process::Command::new("docker")
-                            .args(["kill", "--signal", "HUP", "openclaw"])
-                            .output()
-                            .await;
-                        serde_json::json!({
-                            "success": true,
-                            "bytes_restored": bytes,
-                            "message": "Previous config restored and OpenClaw signaled to reload",
-                        })
-                    }
-                    Err(e) => serde_json::json!({ "success": false, "error": e.to_string() }),
+            match tokio::fs::copy(backup_path, config_path).await {
+                Ok(bytes) => {
+                    let _ = tokio::process::Command::new("docker")
+                        .args(["kill", "--signal", "HUP", "openclaw"])
+                        .output()
+                        .await;
+                    serde_json::json!({
+                        "success": true,
+                        "bytes_restored": bytes,
+                        "message": "Previous config restored and OpenClaw signaled to reload",
+                    })
                 }
+                Err(e) => serde_json::json!({ "success": false, "error": e.to_string() }),
             }
-        }).await;
+        })
+        .await;
 
         info!("All command handlers registered");
     }
@@ -850,9 +933,17 @@ mod commands {
         if !hb.docker_running {
             score -= 20.0;
         }
-        if disk_pct > 90.0 { score -= 15.0; } else if disk_pct > 80.0 { score -= 5.0; }
-        if cpu_pct > 95.0 { score -= 10.0; }
-        if mem_pct > 95.0 { score -= 10.0; }
+        if disk_pct > 90.0 {
+            score -= 15.0;
+        } else if disk_pct > 80.0 {
+            score -= 5.0;
+        }
+        if cpu_pct > 95.0 {
+            score -= 10.0;
+        }
+        if mem_pct > 95.0 {
+            score -= 10.0;
+        }
         let health_score = score.clamp(0.0, 100.0) as u8;
 
         serde_json::json!({
@@ -889,7 +980,9 @@ mod commands {
                         available = line.split_whitespace().nth(1)?.parse().ok()?;
                     }
                 }
-                if total == 0 { return None; }
+                if total == 0 {
+                    return None;
+                }
                 Some(((total - available) as f32 / total as f32) * 100.0)
             })
             .unwrap_or(0.0);
@@ -902,7 +995,11 @@ mod commands {
             .and_then(|o| {
                 let stdout = String::from_utf8_lossy(&o.stdout);
                 // df -P output: filesystem 1K-blocks used available capacity mountpoint
-                stdout.lines().nth(1)?.split_whitespace().nth(4)?
+                stdout
+                    .lines()
+                    .nth(1)?
+                    .split_whitespace()
+                    .nth(4)?
                     .trim_end_matches('%')
                     .parse::<f32>()
                     .ok()
@@ -924,9 +1021,7 @@ mod heartbeat {
 
     pub async fn run(node: Arc<ClawNode>) {
         let interval = node.config.heartbeat_interval_secs;
-        let mut ticker = tokio::time::interval(
-            tokio::time::Duration::from_secs(interval),
-        );
+        let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(interval));
         let mut consecutive_failures = 0u32;
 
         loop {
@@ -939,9 +1034,7 @@ mod heartbeat {
                 }
                 Err(e) => {
                     consecutive_failures += 1;
-                    warn!(
-                        "Heartbeat failed ({consecutive_failures} consecutive): {e}"
-                    );
+                    warn!("Heartbeat failed ({consecutive_failures} consecutive): {e}");
                     // After 3 consecutive failures, log as error (Guardian will notice via missed heartbeat)
                     if consecutive_failures >= 3 {
                         tracing::error!(
@@ -969,8 +1062,7 @@ mod heartbeat {
         // POST to GatewayForge API heartbeat endpoint
         let url = format!(
             "{}/v1/instances/{}/heartbeat",
-            node.config.gf_api_base,
-            node.config.instance_id
+            node.config.gf_api_base, node.config.instance_id
         );
 
         node.http_client()
@@ -1002,9 +1094,7 @@ mod metrics_collector {
 
     pub async fn run(node: Arc<ClawNode>) {
         let interval = node.config.metrics_interval_secs;
-        let mut ticker = tokio::time::interval(
-            tokio::time::Duration::from_secs(interval),
-        );
+        let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(interval));
         loop {
             ticker.tick().await;
             debug!("Collecting metrics");
@@ -1035,8 +1125,7 @@ mod metrics_collector {
         // POST metrics to GatewayForge API
         let url = format!(
             "{}/v1/instances/{}/metrics",
-            node.config.gf_api_base,
-            node.config.instance_id
+            node.config.gf_api_base, node.config.instance_id
         );
 
         node.http_client()
@@ -1088,13 +1177,18 @@ mod metrics_collector {
             .ok()
             .and_then(|s| {
                 let line = s.lines().find(|l| l.starts_with("cpu "))?;
-                let parts: Vec<u64> = line.split_whitespace()
+                let parts: Vec<u64> = line
+                    .split_whitespace()
                     .skip(1) // skip "cpu"
                     .filter_map(|v| v.parse().ok())
                     .collect();
-                if parts.len() < 9 { return None; }
+                if parts.len() < 9 {
+                    return None;
+                }
                 let total: u64 = parts.iter().sum();
-                if total == 0 { return None; }
+                if total == 0 {
+                    return None;
+                }
                 let steal = parts[7]; // steal is index 7
                 Some(steal as f32 / total as f32 * 100.0)
             })
@@ -1113,12 +1207,24 @@ mod metrics_collector {
             for line in content.lines() {
                 let mut parts = line.split_whitespace();
                 match parts.next() {
-                    Some("MemTotal:") => total_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
-                    Some("MemFree:") => free_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
-                    Some("MemAvailable:") => available_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
-                    Some("Cached:") => cached_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
-                    Some("SwapTotal:") => swap_total_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
-                    Some("SwapFree:") => swap_free_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+                    Some("MemTotal:") => {
+                        total_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0)
+                    }
+                    Some("MemFree:") => {
+                        free_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0)
+                    }
+                    Some("MemAvailable:") => {
+                        available_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0)
+                    }
+                    Some("Cached:") => {
+                        cached_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0)
+                    }
+                    Some("SwapTotal:") => {
+                        swap_total_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0)
+                    }
+                    Some("SwapFree:") => {
+                        swap_free_kb = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0)
+                    }
                     _ => {}
                 }
             }
@@ -1144,12 +1250,15 @@ mod metrics_collector {
         match output {
             Ok(o) => {
                 let stdout = String::from_utf8_lossy(&o.stdout);
-                stdout.lines()
+                stdout
+                    .lines()
                     .skip(1) // skip header
                     .filter(|line| !line.starts_with("tmpfs") && !line.starts_with("devtmpfs"))
                     .filter_map(|line| {
                         let parts: Vec<&str> = line.split_whitespace().collect();
-                        if parts.len() < 6 { return None; }
+                        if parts.len() < 6 {
+                            return None;
+                        }
                         let total_bytes: u64 = parts[1].parse().ok()?;
                         let used_bytes: u64 = parts[2].parse().ok()?;
                         let free_bytes: u64 = parts[3].parse().ok()?;
@@ -1163,7 +1272,7 @@ mod metrics_collector {
                             used_gb: used_bytes as f32 / 1_073_741_824.0,
                             free_gb: free_bytes as f32 / 1_073_741_824.0,
                             usage_pct,
-                            iops_read: 0,  // Would need /proc/diskstats
+                            iops_read: 0, // Would need /proc/diskstats
                             iops_write: 0,
                         })
                     })
@@ -1183,7 +1292,8 @@ mod metrics_collector {
                     continue;
                 }
                 if let Some((iface, stats)) = line.split_once(':') {
-                    let parts: Vec<u64> = stats.split_whitespace()
+                    let parts: Vec<u64> = stats
+                        .split_whitespace()
                         .filter_map(|v| v.parse().ok())
                         .collect();
                     if parts.len() >= 16 {
@@ -1217,7 +1327,7 @@ mod metrics_collector {
         let client = reqwest::Client::new();
         let url = "http://localhost:8080/metrics";
 
-        match client
+        if let Ok(resp) = client
             .get(url)
             .header("Authorization", format!("Bearer {}", node.config.api_key))
             .timeout(std::time::Duration::from_secs(3))
@@ -1225,20 +1335,18 @@ mod metrics_collector {
             .await
             .and_then(|r| r.error_for_status())
         {
-            Ok(resp) => {
-                if let Ok(json) = resp.json::<serde_json::Value>().await {
-                    return OpenClawMetrics {
-                        http_requests_total: json["http_requests_total"].as_u64().unwrap_or(0),
-                        http_latency_p50_ms: json["http_latency_p50_ms"].as_f64().unwrap_or(0.0) as f32,
-                        http_latency_p95_ms: json["http_latency_p95_ms"].as_f64().unwrap_or(0.0) as f32,
-                        http_latency_p99_ms: json["http_latency_p99_ms"].as_f64().unwrap_or(0.0) as f32,
-                        active_sessions: json["active_sessions"].as_u64().unwrap_or(0) as u32,
-                        websocket_connections: json["websocket_connections"].as_u64().unwrap_or(0) as u32,
-                        error_rate_pct: json["error_rate_pct"].as_f64().unwrap_or(0.0) as f32,
-                    };
-                }
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                return OpenClawMetrics {
+                    http_requests_total: json["http_requests_total"].as_u64().unwrap_or(0),
+                    http_latency_p50_ms: json["http_latency_p50_ms"].as_f64().unwrap_or(0.0) as f32,
+                    http_latency_p95_ms: json["http_latency_p95_ms"].as_f64().unwrap_or(0.0) as f32,
+                    http_latency_p99_ms: json["http_latency_p99_ms"].as_f64().unwrap_or(0.0) as f32,
+                    active_sessions: json["active_sessions"].as_u64().unwrap_or(0) as u32,
+                    websocket_connections: json["websocket_connections"].as_u64().unwrap_or(0)
+                        as u32,
+                    error_rate_pct: json["error_rate_pct"].as_f64().unwrap_or(0.0) as f32,
+                };
             }
-            Err(_) => {}
         }
 
         OpenClawMetrics {

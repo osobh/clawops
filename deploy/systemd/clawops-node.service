@@ -1,0 +1,51 @@
+[Unit]
+Description=GatewayForge ClawNode Agent
+Documentation=https://github.com/redclaw/clawops
+After=network-online.target docker.service tailscaled.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=clawnode
+Group=clawnode
+
+# Environment
+EnvironmentFile=-/etc/gf-clawnode/env
+Environment=RUST_LOG=gf_clawnode=info,gf_health=info,gf_metrics=info,gf_audit=info
+
+# Binary
+ExecStart=/usr/local/bin/gf-clawnode --config /etc/gf-clawnode/config.toml
+
+# Restart policy: always restart on failure, with 10s cooldown
+Restart=always
+RestartSec=10s
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gf-clawnode
+
+# Limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/gf-clawnode /var/lib/gf-clawnode
+ReadOnlyPaths=/etc/gf-clawnode
+CapabilityBoundingSet=
+AmbientCapabilities=
+SecureBits=noroot
+
+# Watchdog: restart if agent stops reporting within 120s
+WatchdogSec=120s
+NotifyAccess=main
+
+[Install]
+WantedBy=multi-user.target

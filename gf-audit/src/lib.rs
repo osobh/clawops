@@ -176,11 +176,7 @@ impl AuditLogger {
     }
 
     /// Update an existing audit record with the action result.
-    pub async fn log_result(
-        &mut self,
-        record_id: Uuid,
-        result: AuditResult,
-    ) -> anyhow::Result<()> {
+    pub async fn log_result(&mut self, record_id: Uuid, result: AuditResult) -> anyhow::Result<()> {
         // TODO: PATCH /v1/audit/{record_id} with result
         let _ = (record_id, result, &self.gf_api_key);
         Ok(())
@@ -198,10 +194,7 @@ impl AuditLogger {
     }
 
     /// Query audit trail for a specific account or instance
-    pub async fn query(
-        &self,
-        filter: AuditFilter,
-    ) -> anyhow::Result<Vec<AuditRecord>> {
+    pub async fn query(&self, filter: AuditFilter) -> anyhow::Result<Vec<AuditRecord>> {
         // TODO: GET /v1/audit with filter params
         let _ = (filter, &self.gf_api_base);
         Ok(vec![])
@@ -298,11 +291,9 @@ pub fn fleet_target() -> AuditTarget {
 mod tests {
     use super::*;
 
-    #[test]
-    fn audit_record_serializes_cleanly() {
-        let target = instance_target("inst-001", "acct-xyz", "hetzner");
-        let record = AuditRecord {
-            record_id: Uuid::new_v4(),
+    fn make_audit_record(record_id: Uuid, target: AuditTarget) -> AuditRecord {
+        AuditRecord {
+            record_id,
             correlation_id: Uuid::new_v4(),
             timestamp: Utc::now(),
             agent: AgentId::Guardian,
@@ -313,10 +304,89 @@ mod tests {
             operator_confirmation: None,
             previous_hash: None,
             record_hash: "abc123".to_string(),
-        };
+        }
+    }
+
+    #[test]
+    fn audit_record_serializes_cleanly() {
+        let target = instance_target("inst-001", "acct-xyz", "hetzner");
+        let record = make_audit_record(Uuid::new_v4(), target);
 
         let json = serde_json::to_string(&record).expect("serialization failed");
-        assert!(json.contains("docker_restart_openclaw"));
+        // AuditAction::DockerRestartOpenClaw with snake_case serializes as
+        // "docker_restart_open_claw" (each capital letter gets a separator)
+        assert!(
+            json.contains("docker_restart_open_claw"),
+            "Expected docker_restart_open_claw in: {json}"
+        );
         assert!(json.contains("guardian"));
+    }
+
+    #[test]
+    fn instance_target_sets_correct_fields() {
+        let target = instance_target("inst-abc", "acct-xyz", "hetzner");
+        assert_eq!(target.target_type, TargetType::Instance);
+        assert_eq!(target.target_id, "inst-abc");
+        assert_eq!(target.account_id, Some("acct-xyz".to_string()));
+        assert_eq!(target.provider, Some("hetzner".to_string()));
+    }
+
+    #[test]
+    fn fleet_target_sets_correct_fields() {
+        let target = fleet_target();
+        assert_eq!(target.target_type, TargetType::Fleet);
+        assert_eq!(target.target_id, "fleet");
+        assert!(
+            target.account_id.is_none(),
+            "fleet_target account_id should be None"
+        );
+        assert!(target.provider.is_none());
+    }
+
+    #[test]
+    fn audit_logger_new_starts_with_chain_head_none() {
+        let logger = AuditLogger::new(
+            "https://api.example.com".to_string(),
+            "test-key".to_string(),
+        );
+        assert!(logger.chain_head.is_none());
+    }
+
+    #[test]
+    fn compute_hash_different_record_ids_produce_different_hashes() {
+        let logger = AuditLogger::new(
+            "https://api.example.com".to_string(),
+            "test-key".to_string(),
+        );
+
+        let target_a = instance_target("inst-001", "acct-001", "hetzner");
+        let target_b = instance_target("inst-001", "acct-001", "hetzner");
+
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+
+        let record_a = make_audit_record(id_a, target_a);
+        let record_b = make_audit_record(id_b, target_b);
+
+        let hash_a = logger.compute_hash(&record_a);
+        let hash_b = logger.compute_hash(&record_b);
+
+        assert_ne!(
+            hash_a, hash_b,
+            "Different record_ids must produce different hashes"
+        );
+        assert_eq!(hash_a.len(), 64, "SHA-256 hex is 64 chars");
+    }
+
+    #[test]
+    fn audit_filter_default_has_all_none_fields() {
+        let filter = AuditFilter::default();
+        assert!(filter.account_id.is_none());
+        assert!(filter.instance_id.is_none());
+        assert!(filter.agent.is_none());
+        assert!(filter.action.is_none());
+        assert!(filter.from.is_none());
+        assert!(filter.to.is_none());
+        assert!(filter.limit.is_none());
     }
 }

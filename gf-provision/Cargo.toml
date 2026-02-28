@@ -21,3 +21,8 @@ futures.workspace = true
 
 gf-node-proto = { path = "../gf-node-proto" }
 gf-audit = { path = "../gf-audit" }
+
+[features]
+# Run integration tests against live Hetzner API (requires HETZNER_API_TOKEN env var)
+# Usage: cargo test --features integration
+integration = []

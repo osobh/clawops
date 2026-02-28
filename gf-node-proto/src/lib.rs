@@ -290,7 +290,7 @@ pub enum InstanceRole {
 // ─── Provision types ─────────────────────────────────────────────────────────
 
 /// Sent by Forge when requesting a new instance provision
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProvisionRequest {
     pub request_id: Uuid,
     pub account_id: String,
@@ -314,4 +314,167 @@ pub struct ProvisionResult {
     pub instance_ip: Option<String>,
     pub tailscale_ip: Option<String>,
     pub provider_instance_id: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    fn make_heartbeat_payload() -> HeartbeatPayload {
+        HeartbeatPayload {
+            health_score: 95,
+            openclaw_status: ServiceStatus::Healthy,
+            docker_running: true,
+            tailscale_connected: true,
+            uptime_seconds: 3600,
+        }
+    }
+
+    fn make_health_report() -> HealthReport {
+        HealthReport {
+            instance_id: "inst-001".to_string(),
+            health_score: 95,
+            openclaw_status: ServiceStatus::Healthy,
+            docker_status: DockerStatus {
+                running: true,
+                container_count: 2,
+                unhealthy_count: 0,
+            },
+            disk_usage_pct: 45.0,
+            cpu_usage_1m: 10.0,
+            mem_usage_pct: 30.0,
+            swap_usage_pct: 0.0,
+            load_avg_1m: 0.5,
+            load_avg_5m: 0.4,
+            load_avg_15m: 0.3,
+            uptime_seconds: 7200,
+            tailscale_latency_ms: Some(5),
+            last_heartbeat: Utc::now(),
+            openclaw_http_status: Some(200),
+            containers: vec![],
+        }
+    }
+
+    #[test]
+    fn node_message_heartbeat_round_trip() {
+        let payload = NodePayload::Heartbeat(make_heartbeat_payload());
+        let msg = NodeMessage {
+            message_id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            instance_id: "inst-test-001".to_string(),
+            payload,
+        };
+
+        let json = serde_json::to_string(&msg).expect("serialization failed");
+        let decoded: NodeMessage = serde_json::from_str(&json).expect("deserialization failed");
+
+        assert_eq!(decoded.instance_id, "inst-test-001");
+        match decoded.payload {
+            NodePayload::Heartbeat(hb) => {
+                assert_eq!(hb.health_score, 95);
+                assert!(hb.docker_running);
+                assert_eq!(hb.openclaw_status, ServiceStatus::Healthy);
+            }
+            other => panic!("Expected Heartbeat, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_payload_heartbeat_tag_deserialization() {
+        // The serde tag field is "type" with snake_case values
+        let json = serde_json::json!({
+            "type": "heartbeat",
+            "health_score": 80,
+            "openclaw_status": "HEALTHY",
+            "docker_running": true,
+            "tailscale_connected": false,
+            "uptime_seconds": 1000
+        });
+
+        let payload: NodePayload =
+            serde_json::from_value(json).expect("heartbeat tag deserialization failed");
+
+        match payload {
+            NodePayload::Heartbeat(hb) => {
+                assert_eq!(hb.health_score, 80);
+                assert!(!hb.tailscale_connected);
+            }
+            other => panic!("Expected Heartbeat variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_request_serialization_includes_agent_identity() {
+        let req = CommandRequest {
+            request_id: Uuid::new_v4(),
+            command: "vps.health".to_string(),
+            args: serde_json::Value::Null,
+            signature: "aabbcc".to_string(),
+            issued_by: AgentIdentity::Guardian,
+        };
+
+        let json = serde_json::to_string(&req).expect("CommandRequest serialization failed");
+        assert!(
+            json.contains("guardian"),
+            "AgentIdentity::Guardian should serialize as \"guardian\""
+        );
+        assert!(json.contains("vps.health"));
+        assert!(json.contains("aabbcc"));
+
+        let decoded: CommandRequest =
+            serde_json::from_str(&json).expect("CommandRequest deserialization failed");
+        assert_eq!(decoded.issued_by, AgentIdentity::Guardian);
+        assert_eq!(decoded.command, "vps.health");
+    }
+
+    #[test]
+    fn health_report_serialization_round_trip() {
+        let report = make_health_report();
+        let json = serde_json::to_string(&report).expect("HealthReport serialization failed");
+        let decoded: HealthReport =
+            serde_json::from_str(&json).expect("HealthReport deserialization failed");
+
+        assert_eq!(decoded.instance_id, "inst-001");
+        assert_eq!(decoded.health_score, 95);
+        assert_eq!(decoded.openclaw_status, ServiceStatus::Healthy);
+        assert_eq!(decoded.docker_status.unhealthy_count, 0);
+    }
+
+    #[test]
+    fn instance_tier_serde_ordering() {
+        let nano = serde_json::to_string(&InstanceTier::Nano).unwrap();
+        let standard = serde_json::to_string(&InstanceTier::Standard).unwrap();
+        let pro = serde_json::to_string(&InstanceTier::Pro).unwrap();
+        let enterprise = serde_json::to_string(&InstanceTier::Enterprise).unwrap();
+
+        assert_eq!(nano, "\"nano\"");
+        assert_eq!(standard, "\"standard\"");
+        assert_eq!(pro, "\"pro\"");
+        assert_eq!(enterprise, "\"enterprise\"");
+
+        let decoded_nano: InstanceTier = serde_json::from_str("\"nano\"").unwrap();
+        let decoded_enterprise: InstanceTier = serde_json::from_str("\"enterprise\"").unwrap();
+        assert_eq!(decoded_nano, InstanceTier::Nano);
+        assert_eq!(decoded_enterprise, InstanceTier::Enterprise);
+    }
+
+    #[test]
+    fn vps_provider_round_trip() {
+        let providers = [
+            VpsProvider::Hetzner,
+            VpsProvider::Vultr,
+            VpsProvider::Contabo,
+            VpsProvider::Hostinger,
+            VpsProvider::DigitalOcean,
+        ];
+
+        for provider in providers {
+            let json = serde_json::to_string(&provider).expect("VpsProvider serialization failed");
+            let decoded: VpsProvider =
+                serde_json::from_str(&json).expect("VpsProvider deserialization failed");
+            assert_eq!(provider, decoded);
+        }
+    }
 }

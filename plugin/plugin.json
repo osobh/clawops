@@ -1,0 +1,119 @@
+{
+  "name": "openclaw-clawops",
+  "version": "0.1.0",
+  "description": "ClawOps fleet management plugin — 12 tools for GatewayForge VPS fleet operations",
+  "author": "RedClaw Systems LLC <ops@redclaw.systems>",
+  "license": "MIT",
+  "homepage": "https://github.com/redclaw/clawops",
+  "main": "dist/index.js",
+  "entrypoint": "dist/index.js",
+  "export": "default",
+  "minOpenClawVersion": "0.5.0",
+  "tools": [
+    {
+      "name": "fleet-status",
+      "description": "Get a full snapshot of the GatewayForge fleet — instance counts by status, provider breakdown, cost metrics, and active alerts. Call this first for any fleet-wide question.",
+      "category": "fleet"
+    },
+    {
+      "name": "instance-health",
+      "description": "Get detailed health report for a single VPS instance — health score, service status (OpenClaw, Docker, Tailscale), resource usage, and recommended action.",
+      "category": "health"
+    },
+    {
+      "name": "provision",
+      "description": "Provision a new VPS instance or primary/standby pair. Requires: account_id, tier (nano|standard|pro|enterprise), provider, region. Requires operator confirmation for production accounts.",
+      "category": "provisioning"
+    },
+    {
+      "name": "teardown",
+      "description": "Teardown (delete) a VPS instance. SAFETY: Never teardown ACTIVE PRIMARY without confirming STANDBY is ACTIVE first. Requires operator confirmation. Audit logged.",
+      "category": "provisioning"
+    },
+    {
+      "name": "tier-resize",
+      "description": "Resize an instance to a different service tier. Involves brief downtime (~20s for Hetzner). Requires operator confirmation.",
+      "category": "provisioning"
+    },
+    {
+      "name": "config-push",
+      "description": "Push new OpenClaw configuration to one or more instances. SAFETY: Never push to >100 instances without rolling validation. Supports dry-run mode.",
+      "category": "configuration"
+    },
+    {
+      "name": "cost-report",
+      "description": "Generate a cost report — actual vs projected spend, idle accounts, overprovisioned instances, provider cost breakdown, and optimization recommendations.",
+      "category": "cost"
+    },
+    {
+      "name": "provider-health",
+      "description": "Check health and operational status of all VPS providers (Hetzner, Vultr, Contabo, Hostinger, DigitalOcean). Shows API reachability, provision success rates, and active incidents.",
+      "category": "health"
+    },
+    {
+      "name": "audit-log",
+      "description": "Query the audit trail for agent actions. Filter by account, instance, agent, action type, and time range. All infrastructure actions are audit logged.",
+      "category": "audit"
+    },
+    {
+      "name": "pair-status",
+      "description": "Get the primary/standby pair status for an account — both instance states, failover history, and whether the pair is healthy.",
+      "category": "fleet"
+    },
+    {
+      "name": "bulk-restart",
+      "description": "Restart OpenClaw on multiple instances simultaneously. SAFETY: Requires explicit confirmation for actions affecting >10 users.",
+      "category": "fleet"
+    },
+    {
+      "name": "incident-report",
+      "description": "Generate a structured incident report for a fleet event — timeline, affected instances, root cause analysis, resolution steps, and SLA impact.",
+      "category": "incident"
+    }
+  ],
+  "services": [
+    {
+      "name": "clawops-health-monitor",
+      "description": "Background fleet health monitor. Polls all instances every 5 minutes and emits events to Guardian, Ledger, and Commander agents when anomalies are detected.",
+      "autoStart": true
+    }
+  ],
+  "environment": {
+    "required": [
+      {
+        "name": "GF_API_BASE",
+        "description": "GatewayForge control plane API base URL (e.g. https://api.gatewayforge.io)"
+      },
+      {
+        "name": "GF_API_KEY",
+        "description": "GatewayForge service API key for authenticating all API calls"
+      }
+    ],
+    "optional": [
+      {
+        "name": "HEALTH_POLL_INTERVAL_MS",
+        "description": "Fleet health monitor poll interval in milliseconds (default: 300000 = 5 minutes)",
+        "default": "300000"
+      },
+      {
+        "name": "GUARDIAN_SESSION_ID",
+        "description": "OpenClaw session ID of the Guardian agent (for emitting health events)"
+      },
+      {
+        "name": "LEDGER_SESSION_ID",
+        "description": "OpenClaw session ID of the Ledger agent (for cost anomaly events)"
+      },
+      {
+        "name": "COMMANDER_SESSION_ID",
+        "description": "OpenClaw session ID of the Commander agent (for critical alerts)"
+      }
+    ]
+  },
+  "safetyRules": [
+    "Never teardown ACTIVE PRIMARY without confirming STANDBY is ACTIVE",
+    "Never push config to >100 instances without rolling validation",
+    "Never execute provider API deletes without audit log first",
+    "Always check provider status page before declaring widespread incident",
+    "Require explicit confirmation for actions affecting >10 users"
+  ]
+}

@@ -88,7 +88,10 @@ pub struct FailoverEngine {
 
 impl FailoverEngine {
     pub fn new(gf_api_base: String, gf_api_key: String) -> Self {
-        Self { gf_api_base, gf_api_key }
+        Self {
+            gf_api_base,
+            gf_api_key,
+        }
     }
 
     /// Execute a complete failover from failed PRIMARY to STANDBY.
@@ -333,10 +336,7 @@ impl BulkFailoverOrchestrator {
     ) -> Vec<FailoverResult> {
         use futures::stream::{self, StreamExt};
 
-        info!(
-            count = requests.len(),
-            "Starting bulk region failover"
-        );
+        info!(count = requests.len(), "Starting bulk region failover");
 
         stream::iter(requests)
             .map(|req| self.engine.execute_failover(req))
@@ -357,4 +357,99 @@ impl BulkFailoverOrchestrator {
 
 fn elapsed_ms(start: DateTime<Utc>) -> u64 {
     (Utc::now() - start).num_milliseconds().max(0) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn failover_trigger_serde_round_trip() {
+        let triggers = [
+            FailoverTrigger::AutoHeal,
+            FailoverTrigger::ProviderOutage,
+            FailoverTrigger::ManualByCommander,
+            FailoverTrigger::PlannedMaintenance,
+        ];
+
+        for trigger in triggers {
+            let json =
+                serde_json::to_string(&trigger).expect("FailoverTrigger serialization failed");
+            let decoded: FailoverTrigger =
+                serde_json::from_str(&json).expect("FailoverTrigger deserialization failed");
+            assert_eq!(trigger, decoded);
+        }
+    }
+
+    #[test]
+    fn failover_trigger_auto_heal_serializes_as_snake_case() {
+        let json = serde_json::to_string(&FailoverTrigger::AutoHeal).unwrap();
+        assert_eq!(json, "\"auto_heal\"");
+    }
+
+    #[test]
+    fn failover_step_type_serde_round_trip() {
+        let steps = [
+            FailoverStepType::VerifyStandby,
+            FailoverStepType::UpdatePairStatus,
+            FailoverStepType::NotifyGateway,
+            FailoverStepType::UpdateRouting,
+            FailoverStepType::ScheduleReprovisioning,
+            FailoverStepType::NotifyCommander,
+        ];
+
+        for step in steps {
+            let json = serde_json::to_string(&step).expect("FailoverStepType serialization failed");
+            let decoded: FailoverStepType =
+                serde_json::from_str(&json).expect("FailoverStepType deserialization failed");
+            assert_eq!(step, decoded);
+        }
+    }
+
+    #[test]
+    fn failover_request_serialization_includes_all_fields() {
+        let req = FailoverRequest {
+            request_id: Uuid::new_v4(),
+            account_id: "acct-001".to_string(),
+            failed_instance_id: "inst-failed".to_string(),
+            standby_instance_id: "inst-standby".to_string(),
+            trigger_reason: FailoverTrigger::AutoHeal,
+            triggered_by: "guardian".to_string(),
+            triggered_at: Utc::now(),
+        };
+
+        let json = serde_json::to_string(&req).expect("FailoverRequest serialization failed");
+        assert!(json.contains("acct-001"));
+        assert!(json.contains("inst-failed"));
+        assert!(json.contains("inst-standby"));
+        assert!(json.contains("auto_heal"));
+        assert!(json.contains("guardian"));
+
+        let decoded: FailoverRequest =
+            serde_json::from_str(&json).expect("FailoverRequest deserialization failed");
+        assert_eq!(decoded.account_id, "acct-001");
+        assert_eq!(decoded.trigger_reason, FailoverTrigger::AutoHeal);
+    }
+
+    #[test]
+    fn elapsed_ms_returns_non_negative_value_under_1000ms() {
+        let start = Utc::now();
+        let ms = elapsed_ms(start);
+        // Should be very small (test runs in microseconds)
+        assert!(
+            ms < 1000,
+            "elapsed_ms should be < 1000ms for immediate call, got {ms}"
+        );
+    }
+
+    #[test]
+    fn bulk_failover_orchestrator_has_max_concurrent_20() {
+        let engine = FailoverEngine::new(
+            "https://api.example.com".to_string(),
+            "test-key".to_string(),
+        );
+        let orchestrator = BulkFailoverOrchestrator::new(engine);
+        assert_eq!(orchestrator.max_concurrent, 20);
+    }
 }
