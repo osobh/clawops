@@ -1,0 +1,78 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+*.pdb
+
+# Node / TypeScript
+node_modules/
+plugin/node_modules/
+plugin/dist/
+plugin/*.js
+plugin/*.d.ts
+plugin/*.js.map
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+.pnpm-store/
+
+# Build artifacts
+dist/
+build/
+out/
+*.o
+*.a
+*.so
+*.dll
+*.exe
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+*.env
+secrets/
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+
+# IDE / editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OpenClaw workspace runtime
+.openclaw/sessions/
+.openclaw/cache/
+memory/*.tmp
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Proto generated files (committed separately per release)
+**/generated/
+**/*.pb.rs
+**/prost_generated/
+
+# Coverage / profiling
+coverage/
+*.profraw
+*.profdata
+lcov.info
+tarpaulin-report.html
+
+# Temporary
+tmp/
+temp/
+.tmp/
+*.bak
