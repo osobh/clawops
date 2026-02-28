@@ -43,8 +43,7 @@ impl JsonStore {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let content = serde_json::to_string_pretty(data)
-            .map_err(std::io::Error::other)?;
+        let content = serde_json::to_string_pretty(data).map_err(std::io::Error::other)?;
         std::fs::write(&self.path, content)
     }
 }

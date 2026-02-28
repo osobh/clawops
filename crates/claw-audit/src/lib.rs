@@ -68,7 +68,14 @@ pub enum AuditAction {
 
 impl std::fmt::Display for AuditAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", serde_json::to_value(self).unwrap_or_default().as_str().unwrap_or("unknown"))
+        write!(
+            f,
+            "{}",
+            serde_json::to_value(self)
+                .unwrap_or_default()
+                .as_str()
+                .unwrap_or("unknown")
+        )
     }
 }
 
@@ -135,7 +142,11 @@ impl AuditLogger {
             .unwrap_or_default();
 
         info!(record_count = records.len(), last_hash = %last_hash, "audit logger initialized");
-        Self { records, store, last_hash }
+        Self {
+            records,
+            store,
+            last_hash,
+        }
     }
 
     /// Append a new audit record. Returns the record hash.
@@ -210,12 +221,26 @@ impl AuditLogger {
         action: Option<AuditAction>,
         limit: usize,
     ) -> Vec<&AuditRecord> {
-        let mut results: Vec<&AuditRecord> = self.records.values()
+        let mut results: Vec<&AuditRecord> = self
+            .records
+            .values()
             .filter(|r| {
-                if account_id.is_some_and(|aid| !r.target_id.contains(aid) && !r.parameters.to_string().contains(aid)) { return false; }
-                if instance_id.is_some_and(|iid| !r.target_id.contains(iid) && !r.parameters.to_string().contains(iid)) { return false; }
-                if agent.is_some_and(|a| r.agent != a) { return false; }
-                if action.is_some_and(|act| r.action != act) { return false; }
+                if account_id.is_some_and(|aid| {
+                    !r.target_id.contains(aid) && !r.parameters.to_string().contains(aid)
+                }) {
+                    return false;
+                }
+                if instance_id.is_some_and(|iid| {
+                    !r.target_id.contains(iid) && !r.parameters.to_string().contains(iid)
+                }) {
+                    return false;
+                }
+                if agent.is_some_and(|a| r.agent != a) {
+                    return false;
+                }
+                if action.is_some_and(|act| r.action != act) {
+                    return false;
+                }
                 true
             })
             .collect();

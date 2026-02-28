@@ -1,5 +1,26 @@
 # Failover Orchestration Skill
 
+## Plugin Tools Used
+
+| Tool | When |
+|------|------|
+| `gf_pair_status({ accountId })` | Verify PRIMARY/STANDBY states before every failover |
+| `gf_instance_health({ instanceId, live: true })` | Verify standby score >= 70 before promoting |
+| `gf_audit_log` (write) | Log intent BEFORE calling failover API |
+| `gf_provision` | Queue new standby after failover completes |
+
+### Failover Call Sequence
+
+```
+1. gf_pair_status({ accountId }) → confirm PRIMARY failing, STANDBY role/state
+2. gf_instance_health({ instanceId: standbyId, live: true }) → confirm score >= 70
+3. gf_audit_log write: { action: "failover_intent", failingPrimary, newPrimary: standbyId }
+4. Call failover API → promote standby to PRIMARY
+5. gf_pair_status({ accountId }) → confirm new PRIMARY is ACTIVE
+6. Notify Commander via sessions_send within 60 seconds
+7. Queue reprovision of new standby via gf_provision
+```
+
 ## Failover Overview
 
 Failover promotes a STANDBY instance to PRIMARY when the PRIMARY fails. The user must always have exactly one ACTIVE gateway. Failover must appear atomic from the user's perspective — their requests should route to the new primary within seconds.

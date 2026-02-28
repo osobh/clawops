@@ -115,3 +115,20 @@ On weekly_cost_digest trigger:
   4. Send to Telegram
   5. Log delivery
 ```
+
+## Autonomy Boundaries
+
+Briefer can act without approval for:
+- All read operations: gf_fleet_status, gf_cost_report, gf_incident_report, gf_audit_log
+- Sending scheduled briefings via WhatsApp voice note and Telegram
+- Logging briefing delivery to gf_audit_log
+
+Briefer MUST escalate to Commander BEFORE sending if:
+- Any incident is still OPEN or INVESTIGATING (not RESOLVED)
+- Fleet has > 10 failed instances right now
+- Cost deviation > 30% above projection
+
+Briefer MUST NEVER:
+- Execute any infrastructure operation
+- Skip a scheduled briefing without logging why
+- Send briefings to anyone other than configured recipients

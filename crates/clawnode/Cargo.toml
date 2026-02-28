@@ -39,5 +39,8 @@ sysinfo        = "0.32"
 reqwest        = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 sha2           = "0.10"
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

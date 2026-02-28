@@ -4,10 +4,10 @@
 //! fleet management commands: health, metrics, docker, config, secrets.
 
 use clap::{Parser, Subcommand};
-use clawnode::{config::NodeConfig, create_state, GatewayClient};
+use clawnode::{GatewayClient, config::NodeConfig, create_state};
 use std::path::PathBuf;
 use tracing::{error, info};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 #[derive(Parser)]
 #[command(name = "clawnode")]
@@ -153,11 +153,7 @@ async fn run_agent(config_path: PathBuf) -> anyhow::Result<()> {
 
 // ─── Join ─────────────────────────────────────────────────────────────────────
 
-async fn join_gateway(
-    gateway: String,
-    token: String,
-    config_path: PathBuf,
-) -> anyhow::Result<()> {
+async fn join_gateway(gateway: String, token: String, config_path: PathBuf) -> anyhow::Result<()> {
     let hostname = hostname::get()
         .map(|h| h.to_string_lossy().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
@@ -225,7 +221,10 @@ fn system_info() -> anyhow::Result<()> {
         System::name().unwrap_or_default(),
         System::os_version().unwrap_or_default()
     );
-    println!("  Kernel:    {}", System::kernel_version().unwrap_or_default());
+    println!(
+        "  Kernel:    {}",
+        System::kernel_version().unwrap_or_default()
+    );
     println!();
     println!("  CPUs:      {}", sys.cpus().len());
     println!(
@@ -267,7 +266,7 @@ fn init_config(output: PathBuf, gateway: String) -> anyhow::Result<()> {
 // ─── Exec ─────────────────────────────────────────────────────────────────────
 
 async fn exec_command(command: &str, params_str: &str) -> anyhow::Result<()> {
-    use clawnode::commands::{handle_command, CommandRequest};
+    use clawnode::commands::{CommandRequest, handle_command};
 
     let params: serde_json::Value = serde_json::from_str(params_str)
         .map_err(|e| anyhow::anyhow!("invalid JSON params: {e}"))?;

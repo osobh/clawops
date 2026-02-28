@@ -72,12 +72,12 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: plugin/package-lock.json
+          cache-dependency-path: plugin/openclaw-clawops/package-lock.json
 
       - name: Install dependencies
-        working-directory: plugin
+        working-directory: plugin/openclaw-clawops
         run: npm ci
 
       - name: TypeScript type check
-        working-directory: plugin
+        working-directory: plugin/openclaw-clawops
         run: npx tsc --noEmit

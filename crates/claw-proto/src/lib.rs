@@ -317,7 +317,11 @@ pub struct CommandResult {
 
 /// Validate an instance ID format.
 pub fn validate_instance_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Validate an account ID format.

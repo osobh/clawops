@@ -5,7 +5,7 @@
 
 use crate::SharedState;
 use crate::commands::CommandError;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sysinfo::System;
 use tracing::info;
 
@@ -139,9 +139,9 @@ pub async fn handle_vps_metrics(_state: &SharedState) -> Result<Value, CommandEr
         .collect();
 
     let networks = sysinfo::Networks::new_with_refreshed_list();
-    let (bytes_sent, bytes_recv): (u64, u64) = networks
-        .iter()
-        .fold((0, 0), |(s, r), (_, n)| (s + n.transmitted(), r + n.received()));
+    let (bytes_sent, bytes_recv): (u64, u64) = networks.iter().fold((0, 0), |(s, r), (_, n)| {
+        (s + n.transmitted(), r + n.received())
+    });
 
     Ok(json!({
         "ok": true,
@@ -250,10 +250,7 @@ pub async fn handle_system_info(state: &SharedState) -> Result<Value, CommandErr
 
 // ─── system.run ──────────────────────────────────────────────────────────────
 
-pub async fn handle_system_run(
-    _state: &SharedState,
-    params: Value,
-) -> Result<Value, CommandError> {
+pub async fn handle_system_run(_state: &SharedState, params: Value) -> Result<Value, CommandError> {
     let cmd = params
         .get("command")
         .or_else(|| params.get("cmd"))

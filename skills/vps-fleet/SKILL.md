@@ -1,5 +1,29 @@
 # VPS Fleet Topology Skill
 
+## Plugin Tools Used
+
+| Tool | When to Call |
+|------|-------------|
+| `gf_fleet_status` | Start of every operator interaction; fleet-wide state questions |
+| `gf_instance_health` | Specific instance diagnostics; after any heal action |
+| `gf_pair_status` | Account-level pair health; before any failover decision |
+
+### Call Sequences
+
+**Fleet overview at session start:**
+```
+1. gf_fleet_status({}) → summarize active/degraded/failed counts
+2. If degraded > 0: surface instances needing attention
+3. If alerts present: highlight to operator
+```
+
+**Instance deep-dive:**
+```
+1. gf_instance_health({ instanceId, live: true })
+2. Surface health_score, openclawStatus, Docker/Tailscale state
+3. Surface alerts and recommended_action
+```
+
 ## Fleet Architecture
 
 The GatewayForge fleet is a collection of **user gateway pairs**. Each user account gets:

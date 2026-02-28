@@ -1,5 +1,26 @@
 # Config Push Skill
 
+## Plugin Tools Used
+
+| Tool | When |
+|------|------|
+| `gf_config_push({ instanceIds, config, dryRun: true })` | Dry-run validation first |
+| `gf_config_push({ instanceIds, config, rolling: true })` | Live push with rolling strategy |
+| `gf_instance_health({ instanceId, live: true })` | Verify instance health after push |
+| `gf_audit_log` (write) | Log push intent before any config change |
+| `gf_fleet_status({})` | Get instance list for fleet-wide pushes |
+
+### Config Push Call Sequence
+
+```
+1. gf_audit_log write: { action: "config_push_intent", instanceCount, config_hash }
+2. gf_config_push({ instanceIds, config, dryRun: true }) → validate first
+3. If dry-run passes: gf_config_push({ instanceIds, config, rolling: true, batchSize: 50 })
+4. After each batch: gf_instance_health on 3 random instances → verify score >= 70
+5. If batch error rate > 10%: STOP, notify Commander, do not continue
+6. gf_audit_log write: { action: "config_push_complete", successCount, failCount }
+```
+
 ## Config Deployment Overview
 
 Config pushes update the OpenClaw configuration on running instances. Most config changes can be hot-reloaded (no restart required). Model changes, channel additions, and memory directory changes require awareness of timing.

@@ -1,5 +1,27 @@
 # Instance Diagnostics Skill
 
+## Plugin Tools Used
+
+| Tool | When |
+|------|------|
+| `gf_instance_health({ instanceId, live: true })` | Primary diagnostic tool — always call first |
+| `gf_pair_status({ accountId })` | Understand pair context (PRIMARY vs STANDBY) |
+| `gf_audit_log({ resource: instanceId })` | Recent actions on this instance |
+| `gf_provider_health({})` | Rule out provider-wide issues |
+
+### Standard Diagnostic Sequence
+
+```
+1. gf_instance_health({ instanceId, live: true })
+   → Check: health_score, openclawStatus, dockerRunning, tailscaleConnected
+2. gf_pair_status({ accountId })
+   → Confirm role (PRIMARY/STANDBY) and pair health
+3. gf_audit_log({ resource: instanceId, limit: 20 })
+   → Any recent config pushes, restarts, or failed actions?
+4. If provider suspected: gf_provider_health({})
+   → Rule out infrastructure-level issues
+```
+
 ## Diagnostic Decision Guide
 
 Use this skill when an instance is degraded and you need to identify root cause before deciding on remediation.

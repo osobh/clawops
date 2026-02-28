@@ -1,5 +1,16 @@
 # Provisioning Skill
 
+## Plugin Tools Used
+
+| Tool | When |
+|------|------|
+| `gf_provider_health({})` | Pre-provision check — verify provider score >= 75 |
+| `gf_provision({ accountId, tier, primaryProvider, ... })` | Create pair |
+| `gf_pair_status({ accountId, provisionRequestId })` | Poll progress every 60s |
+| `gf_instance_health({ instanceId, live: true })` | Verify new instance healthy |
+| `gf_teardown({ instanceId, confirmStandbyOnly: true })` | Reprovision failed standby only |
+| `gf_audit_log` (write) | Log BEFORE every provider API call — required |
+
 ## Provisioning Overview
 
 Provisioning creates a primary/standby VPS pair for a user account. Forge owns this process. Standard provision time: 4–8 minutes.

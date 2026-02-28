@@ -2,7 +2,7 @@
 
 use crate::SharedState;
 use crate::commands::{CommandError, CommandRequest};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 pub async fn handle_config_command(

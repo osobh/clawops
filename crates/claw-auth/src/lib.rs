@@ -61,11 +61,16 @@ impl ApiKeyStore {
     }
 
     pub fn find_by_hash(&self, secret_hash: &str) -> Option<&ApiKeyRecord> {
-        self.keys.values().find(|k| k.secret_hash == secret_hash && k.active)
+        self.keys
+            .values()
+            .find(|k| k.secret_hash == secret_hash && k.active)
     }
 
     pub fn revoke(&mut self, key_id: &str) -> Result<(), String> {
-        let key = self.keys.get_mut(key_id).ok_or_else(|| format!("key '{key_id}' not found"))?;
+        let key = self
+            .keys
+            .get_mut(key_id)
+            .ok_or_else(|| format!("key '{key_id}' not found"))?;
         key.active = false;
         self.snapshot();
         Ok(())
@@ -130,8 +135,15 @@ impl AuditLogStore {
         self.snapshot();
     }
 
-    pub fn query(&self, actor: Option<&str>, action: Option<&str>, limit: usize) -> Vec<&AuditLogEntry> {
-        let mut results: Vec<_> = self.entries.values()
+    pub fn query(
+        &self,
+        actor: Option<&str>,
+        action: Option<&str>,
+        limit: usize,
+    ) -> Vec<&AuditLogEntry> {
+        let mut results: Vec<_> = self
+            .entries
+            .values()
             .filter(|e| actor.is_none_or(|a| e.actor == a))
             .filter(|e| action.is_none_or(|a| e.action == a))
             .collect();

@@ -4,10 +4,10 @@
 
 use crate::SharedState;
 use crate::commands::CommandError;
-use claw_health::{compute_health_score, evaluate_alerts, recommend_action, HealthThresholds};
-use claw_proto::{HealthReport, InstanceRole, InstanceState, ServiceStatus};
 use chrono::Utc;
-use serde_json::{json, Value};
+use claw_health::{HealthThresholds, compute_health_score, evaluate_alerts, recommend_action};
+use claw_proto::{HealthReport, InstanceRole, InstanceState, ServiceStatus};
+use serde_json::{Value, json};
 use sysinfo::System;
 
 // ─── Build a HealthReport from live system state ──────────────────────────────
@@ -52,9 +52,9 @@ async fn gather_health_report(state: &SharedState) -> HealthReport {
     let load = System::load_average();
 
     let networks = sysinfo::Networks::new_with_refreshed_list();
-    let (bytes_sent, bytes_recv): (u64, u64) = networks
-        .iter()
-        .fold((0, 0), |(s, r), (_, n)| (s + n.transmitted(), r + n.received()));
+    let (bytes_sent, bytes_recv): (u64, u64) = networks.iter().fold((0, 0), |(s, r), (_, n)| {
+        (s + n.transmitted(), r + n.received())
+    });
 
     let docker_running = std::process::Command::new("docker")
         .args(["info"])

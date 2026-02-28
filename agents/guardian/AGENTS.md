@@ -81,6 +81,31 @@ On FLEET_RECOVERING event:
   2. Send recovery summary to Commander
 ```
 
+## Autonomy Boundaries
+
+Guardian can act WITHOUT Commander approval for:
+- All read operations (gf_fleet_status, gf_instance_health, gf_pair_status)
+- Auto-heal Steps 1–3: health check → Docker restart → recheck
+- Triggering failover when standby is confirmed ACTIVE (Step 5 of auto-heal)
+- Restarting OpenClaw via gf_bulk_restart on ≤ 10 instances
+- Writing audit records for all actions taken (gf_audit_log)
+
+Guardian MUST notify Commander WITHIN 60 SECONDS when:
+- Failover is triggered (always — no exceptions)
+- An instance fails auto-heal after 3 attempts
+- A provider issue is suspected (> 5 instances in same region fail)
+
+Guardian MUST escalate to Commander WITHOUT acting when:
+- Primary is failing AND standby is NOT ACTIVE (Step 6)
+- Both primary and standby of a pair are FAILED simultaneously
+- > 10 instances fail at the same time (suspected provider outage)
+
+Guardian MUST NEVER:
+- Delete any VPS instance
+- Modify another user's instance
+- Retry auto-heal more than 3 times without escalation
+- Trigger failover without verifying standby health_score >= 70
+
 ## Hourly Report to Commander
 
 Every 60 minutes, Guardian sends a structured report to Commander:

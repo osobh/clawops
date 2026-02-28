@@ -1,5 +1,16 @@
 # Auto-Heal Skill
 
+## Plugin Tools Used
+
+| Step | Tool | Purpose |
+|------|------|---------|
+| Step 1 | `gf_instance_health({ instanceId, live: true })` | Confirm health score |
+| Step 2 | `gf_bulk_restart({ instanceIds: [id], service: "openclaw" })` | Docker restart |
+| Step 3 | `gf_instance_health({ instanceId, live: true })` | Verify heal |
+| Step 4 | `gf_pair_status({ accountId })` | Verify PRIMARY/STANDBY roles |
+| Step 5 | `gf_audit_log` (write) + failover call | Log intent then trigger failover |
+| All steps | `gf_audit_log` (write) | Every action must be logged |
+
 This skill defines the exact auto-heal decision tree Guardian follows. Do not improvise or skip steps.
 
 ## Auto-Heal Decision Tree

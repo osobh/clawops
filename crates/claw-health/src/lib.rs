@@ -182,7 +182,10 @@ pub fn evaluate_alerts(report: &HealthReport, thresholds: &HealthThresholds) -> 
         alerts.push(HealthAlert {
             alert_type: AlertType::MemUsageHigh,
             severity: AlertSeverity::Warning,
-            message: format!("Memory usage {:.1}% exceeds threshold", report.mem_usage_pct),
+            message: format!(
+                "Memory usage {:.1}% exceeds threshold",
+                report.mem_usage_pct
+            ),
             threshold: Some(thresholds.mem_alert_pct),
             actual: Some(report.mem_usage_pct),
         });
@@ -399,7 +402,10 @@ impl Default for FleetHealthSweepResult {
 }
 
 /// Process a batch of health reports and produce sweep results.
-pub fn sweep_fleet(reports: &[HealthReport], thresholds: &HealthThresholds) -> FleetHealthSweepResult {
+pub fn sweep_fleet(
+    reports: &[HealthReport],
+    thresholds: &HealthThresholds,
+) -> FleetHealthSweepResult {
     let mut result = FleetHealthSweepResult::new();
     result.total_instances = reports.len() as u32;
 
@@ -437,7 +443,7 @@ pub fn sweep_fleet(reports: &[HealthReport], thresholds: &HealthThresholds) -> F
 #[cfg(test)]
 mod tests {
     use super::*;
-    use claw_proto::{ServiceStatus, VpsProvider, InstanceTier};
+    use claw_proto::{InstanceTier, ServiceStatus, VpsProvider};
 
     fn make_healthy_report(instance_id: &str) -> HealthReport {
         HealthReport {
@@ -517,22 +523,40 @@ mod tests {
     #[test]
     fn test_recommend_action_degraded() {
         let thresholds = HealthThresholds::default();
-        assert_eq!(recommend_action(60, &thresholds), RecommendedAction::Monitor);
-        assert_eq!(recommend_action(41, &thresholds), RecommendedAction::Monitor);
+        assert_eq!(
+            recommend_action(60, &thresholds),
+            RecommendedAction::Monitor
+        );
+        assert_eq!(
+            recommend_action(41, &thresholds),
+            RecommendedAction::Monitor
+        );
     }
 
     #[test]
     fn test_recommend_action_critical() {
         let thresholds = HealthThresholds::default();
-        assert_eq!(recommend_action(35, &thresholds), RecommendedAction::AutoHeal);
-        assert_eq!(recommend_action(20, &thresholds), RecommendedAction::AutoHeal);
+        assert_eq!(
+            recommend_action(35, &thresholds),
+            RecommendedAction::AutoHeal
+        );
+        assert_eq!(
+            recommend_action(20, &thresholds),
+            RecommendedAction::AutoHeal
+        );
     }
 
     #[test]
     fn test_recommend_action_escalate() {
         let thresholds = HealthThresholds::default();
-        assert_eq!(recommend_action(0, &thresholds), RecommendedAction::EscalateToCommander);
-        assert_eq!(recommend_action(10, &thresholds), RecommendedAction::EscalateToCommander);
+        assert_eq!(
+            recommend_action(0, &thresholds),
+            RecommendedAction::EscalateToCommander
+        );
+        assert_eq!(
+            recommend_action(10, &thresholds),
+            RecommendedAction::EscalateToCommander
+        );
     }
 
     #[test]
@@ -594,15 +618,11 @@ mod tests {
     #[test]
     fn test_fleet_health_sweep() {
         let thresholds = HealthThresholds::default();
-        let reports = vec![
-            make_healthy_report("i-1"),
-            make_healthy_report("i-2"),
-            {
-                let mut r = make_healthy_report("i-3");
-                r.openclaw_status = ServiceStatus::Down;
-                r
-            },
-        ];
+        let reports = vec![make_healthy_report("i-1"), make_healthy_report("i-2"), {
+            let mut r = make_healthy_report("i-3");
+            r.openclaw_status = ServiceStatus::Down;
+            r
+        }];
 
         let result = sweep_fleet(&reports, &thresholds);
         assert_eq!(result.total_instances, 3);
@@ -627,7 +647,15 @@ mod tests {
         report.disk_usage_pct = 90.0;
 
         let alerts = evaluate_alerts(&report, &thresholds);
-        assert!(alerts.iter().any(|a| a.alert_type == AlertType::OpenClawDown));
-        assert!(alerts.iter().any(|a| a.alert_type == AlertType::DiskUsageHigh));
+        assert!(
+            alerts
+                .iter()
+                .any(|a| a.alert_type == AlertType::OpenClawDown)
+        );
+        assert!(
+            alerts
+                .iter()
+                .any(|a| a.alert_type == AlertType::DiskUsageHigh)
+        );
     }
 }

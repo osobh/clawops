@@ -1,5 +1,25 @@
 # Cost Analysis Skill
 
+## Plugin Tools Used
+
+| Tool | When |
+|------|------|
+| `gf_cost_report({ period, includeIdleAnalysis })` | Primary cost data source |
+| `gf_fleet_status({})` | Fleet size for cost-per-account calculations |
+| `gf_provider_health({})` | Provider performance vs cost comparison |
+| `gf_audit_log({ action: "provision" })` | Recent provisions that may explain cost changes |
+| `gf_instance_health({ instanceId })` | Verify utilization before recommending downsize |
+
+### Standard Cost Sweep Sequence
+
+```
+1. gf_cost_report({ period: "current_month", includeIdleAnalysis: true })
+2. gf_fleet_status({}) → cross-reference instance counts
+3. Identify: idle accounts, overprovisioned tiers, expensive providers
+4. gf_instance_health on top-cost instances → confirm utilization data
+5. Send recommendations to Commander via sessions_send
+```
+
 ## Cost Analysis Framework
 
 Ledger analyzes fleet costs to identify waste and optimize spending. The goal is maximum value per dollar — not minimum spend at the cost of reliability.

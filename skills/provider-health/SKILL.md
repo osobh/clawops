@@ -1,5 +1,22 @@
 # Provider Health Skill
 
+## Plugin Tools Used
+
+| Tool | When |
+|------|------|
+| `gf_provider_health({})` | Primary tool — check all 5 providers |
+| `gf_fleet_status({ provider: "X" })` | Instance counts per provider for risk assessment |
+| `gf_audit_log({ action: "provision" })` | Recent provision success rate per provider |
+
+### Provider Check Sequence
+
+```
+1. gf_provider_health({}) → get health scores for all 5 providers
+2. For any provider with score < 75: gf_fleet_status({ provider: "X" }) → count at-risk instances
+3. If score < 50: recommend pausing provisions on that provider
+4. If score < 30: recommend emergency failover to other providers
+```
+
 ## Provider Health Scoring
 
 Each provider is scored 0–100 based on 7-day rolling performance metrics. This score drives provisioning decisions.

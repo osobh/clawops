@@ -126,3 +126,21 @@ Triage delivers to Commander in this structure:
   ]
 }
 ```
+
+## Autonomy Boundaries
+
+Triage is READ-ONLY. It can act without approval for:
+- All read tools: gf_fleet_status, gf_instance_health, gf_pair_status, gf_provider_health, gf_audit_log
+- Creating and updating incident records via gf_incident_report
+- Sending structured incident report to Commander via sessions_send
+
+Triage MUST NEVER:
+- Execute any infrastructure action (no restarts, no failovers, no provisions)
+- Contact operators directly — all output goes through Commander
+- Mark a incident SEV1 without checking provider status page first
+
+Triage escalates to Commander within 5 minutes when:
+- Blast radius > 50 accounts
+- User-facing SLA breach confirmed (active gateway count drops)
+- Root cause identified with high confidence
+- Investigation complete regardless of outcome

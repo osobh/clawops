@@ -35,8 +35,9 @@ impl MetricStore {
 
     /// Push a metric point. Evicts expired data.
     pub fn push(&self, name: &MetricName, point: MetricPoint) -> Result<()> {
-        let cutoff = Utc::now() - chrono::Duration::from_std(self.retention)
-            .map_err(|_| MetricsError::InvalidRetention)?;
+        let cutoff = Utc::now()
+            - chrono::Duration::from_std(self.retention)
+                .map_err(|_| MetricsError::InvalidRetention)?;
 
         let mut series = self.series.write();
         let deque = series.entry(name.0.clone()).or_default();
@@ -51,7 +52,12 @@ impl MetricStore {
     }
 
     /// Query all points in the given time range.
-    pub fn query(&self, name: &MetricName, range: TimeRange, limit: Option<usize>) -> Result<Vec<MetricPoint>> {
+    pub fn query(
+        &self,
+        name: &MetricName,
+        range: TimeRange,
+        limit: Option<usize>,
+    ) -> Result<Vec<MetricPoint>> {
         let series = self.series.read();
         let Some(deque) = series.get(&name.0) else {
             return Ok(vec![]);
@@ -117,7 +123,14 @@ pub fn push_vps_snapshot(
         let Ok(name) = MetricName::new(&name_str) else {
             continue;
         };
-        if let Err(e) = store.push(&name, MetricPoint { timestamp: now, value, labels: HashMap::new() }) {
+        if let Err(e) = store.push(
+            &name,
+            MetricPoint {
+                timestamp: now,
+                value,
+                labels: HashMap::new(),
+            },
+        ) {
             warn!(metric = %name_str, error = %e, "failed to push metric");
         }
     }
@@ -149,8 +162,13 @@ pub mod types {
             if name.is_empty() {
                 return Err(MetricsError::InvalidName("empty name".to_string()));
             }
-            if !name.chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-')) {
-                return Err(MetricsError::InvalidName(format!("invalid chars in '{name}'")));
+            if !name
+                .chars()
+                .all(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            {
+                return Err(MetricsError::InvalidName(format!(
+                    "invalid chars in '{name}'"
+                )));
             }
             Ok(Self(name.to_string()))
         }
@@ -233,7 +251,9 @@ mod tests {
         store.push(&name, MetricPoint::now(42.0)).expect("push");
         store.push(&name, MetricPoint::now(50.0)).expect("push");
 
-        let points = store.query(&name, TimeRange::last_minutes(5), None).expect("query");
+        let points = store
+            .query(&name, TimeRange::last_minutes(5), None)
+            .expect("query");
         assert_eq!(points.len(), 2);
     }
 
@@ -259,7 +279,9 @@ mod tests {
         store.push(&name, MetricPoint::now(20.0)).expect("push");
         store.push(&name, MetricPoint::now(30.0)).expect("push");
 
-        let avg = store.average_over(&name, TimeRange::last_minutes(5)).expect("avg");
+        let avg = store
+            .average_over(&name, TimeRange::last_minutes(5))
+            .expect("avg");
         assert!((avg - 20.0).abs() < 0.001);
     }
 }

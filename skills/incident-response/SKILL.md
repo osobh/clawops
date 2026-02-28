@@ -1,5 +1,29 @@
 # Incident Response Skill
 
+## Plugin Tools Used
+
+| Tool | When |
+|------|------|
+| `gf_fleet_status({ status: "FAILED" })` | Blast radius assessment |
+| `gf_instance_health({ instanceId, live: true })` | Individual instance diagnostics |
+| `gf_pair_status({ accountId })` | Account-level impact assessment |
+| `gf_provider_health({})` | Distinguish provider outage from instance issues |
+| `gf_audit_log({ from: incidentStart })` | Timeline reconstruction |
+| `gf_incident_report({ action: "create" })` | Create incident record |
+| `gf_incident_report({ action: "update" })` | Update as incident evolves |
+
+### Incident Investigation Sequence
+
+```
+1. gf_fleet_status({ status: "FAILED" }) → count affected instances, by provider/region
+2. gf_provider_health({}) → check if provider has active incident
+3. gf_audit_log({ from: detectedAt, limit: 100 }) → reconstruct timeline
+4. gf_incident_report({ action: "create", severity, title, blastRadius })
+5. For each affected account: gf_pair_status({ accountId }) → failover status
+6. gf_incident_report({ action: "update", timeline, rootCause, openItems })
+7. Send structured report to Commander via sessions_send
+```
+
 ## Incident Response Philosophy
 
 Speed is critical, but accuracy is more important than speed. A wrong root cause leads to wrong remediation. Take 2 extra minutes to verify before acting.

@@ -6,7 +6,7 @@
 
 #![forbid(unsafe_code)]
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
@@ -193,7 +193,13 @@ impl DeviceIdentity {
             .as_millis() as u64;
 
         let payload = self.build_auth_payload(
-            client_id, client_mode, role, scopes, signed_at, token, nonce,
+            client_id,
+            client_mode,
+            role,
+            scopes,
+            signed_at,
+            token,
+            nonce,
         );
 
         let signature = self.sign(&payload);

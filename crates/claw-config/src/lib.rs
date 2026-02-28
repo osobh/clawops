@@ -108,7 +108,9 @@ mod tests {
 
         let mut data = HashMap::new();
         data.insert("key1".to_string(), "value1".to_string());
-        store.create("test-config".to_string(), data, false).expect("create");
+        store
+            .create("test-config".to_string(), data, false)
+            .expect("create");
 
         let entry = store.get("test-config").expect("get");
         assert_eq!(entry.data.get("key1").unwrap(), "value1");
@@ -128,7 +130,9 @@ mod tests {
 
         let mut data = HashMap::new();
         data.insert("key".to_string(), "val".to_string());
-        store.create("immutable-cfg".to_string(), data, true).expect("create");
+        store
+            .create("immutable-cfg".to_string(), data, true)
+            .expect("create");
 
         let result = store.update("immutable-cfg", HashMap::new());
         assert!(result.is_err());
@@ -141,7 +145,9 @@ mod tests {
             let mut store = ConfigStore::new(dir.path());
             let mut data = HashMap::new();
             data.insert("db_host".to_string(), "localhost".to_string());
-            store.create("db-config".to_string(), data, false).expect("create");
+            store
+                .create("db-config".to_string(), data, false)
+                .expect("create");
         }
         {
             let store = ConfigStore::new(dir.path());
@@ -155,9 +161,15 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut store = ConfigStore::new(dir.path());
 
-        store.create("app.db".to_string(), HashMap::new(), false).expect("create");
-        store.create("app.cache".to_string(), HashMap::new(), false).expect("create");
-        store.create("sys.network".to_string(), HashMap::new(), false).expect("create");
+        store
+            .create("app.db".to_string(), HashMap::new(), false)
+            .expect("create");
+        store
+            .create("app.cache".to_string(), HashMap::new(), false)
+            .expect("create");
+        store
+            .create("sys.network".to_string(), HashMap::new(), false)
+            .expect("create");
 
         assert_eq!(store.list(Some("app.")).len(), 2);
         assert_eq!(store.list(Some("sys.")).len(), 1);

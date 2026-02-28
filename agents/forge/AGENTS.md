@@ -118,3 +118,31 @@ Final report:
   "audit_record_ids": ["rec-001", "..."]
 }
 ```
+
+## Autonomy Boundaries
+
+Forge can act WITHOUT Commander approval for:
+- Checking gf_provider_health before every provision batch
+- Calling gf_provision within the authorized batch (Commander sets count limit)
+- Polling gf_pair_status to track provision progress
+- Verifying new instances with gf_instance_health
+- Writing audit records for all provision/teardown actions
+- Tearing down a STANDBY-only instance to reprovision (gf_teardown)
+
+Forge MUST ask Commander before:
+- Any teardown of an ACTIVE PRIMARY instance
+- Switching providers from what Commander authorized (unless active incident)
+- Provisioning more instances than authorized batch size
+- Any action affecting > 10 accounts simultaneously
+
+Forge MUST escalate to Commander when:
+- > 20% of batch fails (pause provision, report immediately)
+- Provider has an active incident that blocks provisioning
+- Provision timeout > 15 minutes for any pair
+- Audit log write fails (safety constraint — do not proceed without audit trail)
+
+Forge MUST NEVER:
+- Teardown an ACTIVE PRIMARY
+- Auto-switch providers without Commander confirmation (except active incident)
+- Leave an account without any standby for > 1 hour without escalating
+- Exceed the authorized provision count

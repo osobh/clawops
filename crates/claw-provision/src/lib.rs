@@ -6,7 +6,7 @@
 
 #![forbid(unsafe_code)]
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use claw_proto::{InstanceRole, InstanceTier, ProvisionRequest, ProvisionResult, VpsProvider};
@@ -23,7 +23,11 @@ pub trait Provider: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &str;
     async fn provision(&self, req: &ProvisionRequest) -> Result<ProvisionResult>;
     async fn teardown(&self, provider_instance_id: &str, account_id: &str) -> Result<()>;
-    async fn resize(&self, provider_instance_id: &str, new_tier: &InstanceTier) -> Result<ResizeResult>;
+    async fn resize(
+        &self,
+        provider_instance_id: &str,
+        new_tier: &InstanceTier,
+    ) -> Result<ResizeResult>;
     async fn provider_health(&self) -> Result<ProviderHealth>;
     fn supported_regions(&self) -> Vec<Region>;
     fn supports_live_resize(&self) -> bool;
@@ -72,11 +76,53 @@ pub struct TierSpec {
 impl TierSpec {
     pub fn all() -> HashMap<String, TierSpec> {
         [
-            ("nano".to_string(), TierSpec { tier: InstanceTier::Nano, vcpu: 1, ram_gb: 1, disk_gb: 20, bandwidth_tb: 1.0, monthly_cost_usd: 4.00 }),
-            ("standard".to_string(), TierSpec { tier: InstanceTier::Standard, vcpu: 2, ram_gb: 4, disk_gb: 80, bandwidth_tb: 4.0, monthly_cost_usd: 12.00 }),
-            ("pro".to_string(), TierSpec { tier: InstanceTier::Pro, vcpu: 4, ram_gb: 8, disk_gb: 160, bandwidth_tb: 8.0, monthly_cost_usd: 24.00 }),
-            ("enterprise".to_string(), TierSpec { tier: InstanceTier::Enterprise, vcpu: 8, ram_gb: 16, disk_gb: 320, bandwidth_tb: 20.0, monthly_cost_usd: 48.00 }),
-        ].into_iter().collect()
+            (
+                "nano".to_string(),
+                TierSpec {
+                    tier: InstanceTier::Nano,
+                    vcpu: 1,
+                    ram_gb: 1,
+                    disk_gb: 20,
+                    bandwidth_tb: 1.0,
+                    monthly_cost_usd: 4.00,
+                },
+            ),
+            (
+                "standard".to_string(),
+                TierSpec {
+                    tier: InstanceTier::Standard,
+                    vcpu: 2,
+                    ram_gb: 4,
+                    disk_gb: 80,
+                    bandwidth_tb: 4.0,
+                    monthly_cost_usd: 12.00,
+                },
+            ),
+            (
+                "pro".to_string(),
+                TierSpec {
+                    tier: InstanceTier::Pro,
+                    vcpu: 4,
+                    ram_gb: 8,
+                    disk_gb: 160,
+                    bandwidth_tb: 8.0,
+                    monthly_cost_usd: 24.00,
+                },
+            ),
+            (
+                "enterprise".to_string(),
+                TierSpec {
+                    tier: InstanceTier::Enterprise,
+                    vcpu: 8,
+                    ram_gb: 16,
+                    disk_gb: 320,
+                    bandwidth_tb: 20.0,
+                    monthly_cost_usd: 48.00,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect()
     }
 
     pub fn monthly_cost(tier: &InstanceTier) -> f32 {
@@ -119,7 +165,9 @@ pub struct ProviderRegistry {
 
 impl ProviderRegistry {
     pub fn new() -> Self {
-        Self { providers: HashMap::new() }
+        Self {
+            providers: HashMap::new(),
+        }
     }
 
     pub fn from_env() -> Self {
@@ -129,7 +177,10 @@ impl ProviderRegistry {
             registry.register(Box::new(HetznerProvider::new(token)));
         }
         if let Ok(key) = std::env::var("VULTR_API_KEY") {
-            registry.register(Box::new(VultrProvider { api_key: key, client: build_client() }));
+            registry.register(Box::new(VultrProvider {
+                api_key: key,
+                client: build_client(),
+            }));
         }
         if let Ok(key) = std::env::var("CONTABO_API_KEY") {
             registry.register(Box::new(ContaboProvider { api_key: key }));
@@ -162,7 +213,8 @@ impl ProviderRegistry {
 
         if let Some(provider) = self.providers.get(preferred_name)
             && let Ok(health) = provider.provider_health().await
-            && health.health_score >= 75 && !health.active_incident
+            && health.health_score >= 75
+            && !health.active_incident
             && let Some(region) = provider
                 .supported_regions()
                 .into_iter()
@@ -178,7 +230,8 @@ impl ProviderRegistry {
                 continue;
             }
             if let Ok(health) = provider.provider_health().await
-                && !health.active_incident && health.health_score >= 65
+                && !health.active_incident
+                && health.health_score >= 65
             {
                 candidates.push((health.health_score, name.as_str()));
             }
@@ -204,7 +257,10 @@ impl ProviderRegistry {
         for provider in self.providers.values() {
             match provider.provider_health().await {
                 Ok(health) => results.push(health),
-                Err(e) => warn!(provider = provider.name(), "provider health check failed: {e}"),
+                Err(e) => warn!(
+                    provider = provider.name(),
+                    "provider health check failed: {e}"
+                ),
             }
         }
         results
@@ -313,7 +369,6 @@ echo "clawnode bootstrap complete - instance {instance_id}"
     )
 }
 
-
 // ─── Hetzner provider ─────────────────────────────────────────────────────────
 
 fn hetzner_server_type(tier: &InstanceTier) -> &'static str {
@@ -353,10 +408,46 @@ impl HetznerProvider {
 
     fn regions() -> Vec<Region> {
         vec![
-            Region { id: "eu-hetzner-nbg1".to_string(), display_name: "Hetzner Nuremberg 1".to_string(), city: "Nuremberg".to_string(), country: "DE".to_string(), continent: Continent::EU, provider: VpsProvider::Hetzner, available: true, latency_class: LatencyClass::Low },
-            Region { id: "eu-hetzner-hel1".to_string(), display_name: "Hetzner Helsinki 1".to_string(), city: "Helsinki".to_string(), country: "FI".to_string(), continent: Continent::EU, provider: VpsProvider::Hetzner, available: true, latency_class: LatencyClass::Low },
-            Region { id: "eu-hetzner-fsn1".to_string(), display_name: "Hetzner Falkenstein 1".to_string(), city: "Falkenstein".to_string(), country: "DE".to_string(), continent: Continent::EU, provider: VpsProvider::Hetzner, available: true, latency_class: LatencyClass::Low },
-            Region { id: "us-hetzner-ash".to_string(), display_name: "Hetzner Ashburn".to_string(), city: "Ashburn".to_string(), country: "US".to_string(), continent: Continent::US, provider: VpsProvider::Hetzner, available: true, latency_class: LatencyClass::Medium },
+            Region {
+                id: "eu-hetzner-nbg1".to_string(),
+                display_name: "Hetzner Nuremberg 1".to_string(),
+                city: "Nuremberg".to_string(),
+                country: "DE".to_string(),
+                continent: Continent::EU,
+                provider: VpsProvider::Hetzner,
+                available: true,
+                latency_class: LatencyClass::Low,
+            },
+            Region {
+                id: "eu-hetzner-hel1".to_string(),
+                display_name: "Hetzner Helsinki 1".to_string(),
+                city: "Helsinki".to_string(),
+                country: "FI".to_string(),
+                continent: Continent::EU,
+                provider: VpsProvider::Hetzner,
+                available: true,
+                latency_class: LatencyClass::Low,
+            },
+            Region {
+                id: "eu-hetzner-fsn1".to_string(),
+                display_name: "Hetzner Falkenstein 1".to_string(),
+                city: "Falkenstein".to_string(),
+                country: "DE".to_string(),
+                continent: Continent::EU,
+                provider: VpsProvider::Hetzner,
+                available: true,
+                latency_class: LatencyClass::Low,
+            },
+            Region {
+                id: "us-hetzner-ash".to_string(),
+                display_name: "Hetzner Ashburn".to_string(),
+                city: "Ashburn".to_string(),
+                country: "US".to_string(),
+                continent: Continent::US,
+                provider: VpsProvider::Hetzner,
+                available: true,
+                latency_class: LatencyClass::Medium,
+            },
         ]
     }
 
@@ -382,10 +473,16 @@ impl HetznerProvider {
                 bail!("server {} entered unexpected state: {status}", server_id);
             }
             if attempt % 12 == 0 {
-                info!(server_id, status, "waiting for server to reach running state");
+                info!(
+                    server_id,
+                    status, "waiting for server to reach running state"
+                );
             }
         }
-        bail!("timeout waiting for Hetzner server {} to reach running state", server_id)
+        bail!(
+            "timeout waiting for Hetzner server {} to reach running state",
+            server_id
+        )
     }
 
     /// List all ClawOps-managed servers.
@@ -413,7 +510,11 @@ impl HetznerProvider {
 
             let has_next = resp.meta.pagination.next_page.is_some();
             all_servers.extend(resp.servers);
-            if has_next { page += 1; } else { break; }
+            if has_next {
+                page += 1;
+            } else {
+                break;
+            }
         }
 
         info!(count = all_servers.len(), "listed Hetzner servers");
@@ -440,7 +541,9 @@ impl HetznerProvider {
 
 #[async_trait]
 impl Provider for HetznerProvider {
-    fn name(&self) -> &str { "hetzner" }
+    fn name(&self) -> &str {
+        "hetzner"
+    }
 
     async fn provision(&self, req: &ProvisionRequest) -> Result<ProvisionResult> {
         let start = std::time::Instant::now();
@@ -517,9 +620,15 @@ impl Provider for HetznerProvider {
     }
 
     async fn teardown(&self, provider_instance_id: &str, account_id: &str) -> Result<()> {
-        info!(provider_instance_id, account_id, "tearing down Hetzner instance");
+        info!(
+            provider_instance_id,
+            account_id, "tearing down Hetzner instance"
+        );
         self.client
-            .delete(format!("{}/servers/{}", self.base_url, provider_instance_id))
+            .delete(format!(
+                "{}/servers/{}",
+                self.base_url, provider_instance_id
+            ))
             .bearer_auth(&self.api_token)
             .send()
             .await
@@ -530,14 +639,23 @@ impl Provider for HetznerProvider {
         Ok(())
     }
 
-    async fn resize(&self, provider_instance_id: &str, new_tier: &InstanceTier) -> Result<ResizeResult> {
+    async fn resize(
+        &self,
+        provider_instance_id: &str,
+        new_tier: &InstanceTier,
+    ) -> Result<ResizeResult> {
         info!(provider_instance_id, tier = ?new_tier, "resizing Hetzner instance");
 
         // Power off
         self.client
-            .post(format!("{}/servers/{}/actions/poweroff", self.base_url, provider_instance_id))
+            .post(format!(
+                "{}/servers/{}/actions/poweroff",
+                self.base_url, provider_instance_id
+            ))
             .bearer_auth(&self.api_token)
-            .send().await?.error_for_status()?;
+            .send()
+            .await?
+            .error_for_status()?;
 
         tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
 
@@ -547,18 +665,28 @@ impl Provider for HetznerProvider {
             "upgrade_disk": false,
         });
         self.client
-            .post(format!("{}/servers/{}/actions/change_type", self.base_url, provider_instance_id))
+            .post(format!(
+                "{}/servers/{}/actions/change_type",
+                self.base_url, provider_instance_id
+            ))
             .bearer_auth(&self.api_token)
             .json(&body)
-            .send().await?.error_for_status()?;
+            .send()
+            .await?
+            .error_for_status()?;
 
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
         // Power back on
         self.client
-            .post(format!("{}/servers/{}/actions/poweron", self.base_url, provider_instance_id))
+            .post(format!(
+                "{}/servers/{}/actions/poweron",
+                self.base_url, provider_instance_id
+            ))
             .bearer_auth(&self.api_token)
-            .send().await?.error_for_status()?;
+            .send()
+            .await?
+            .error_for_status()?;
 
         Ok(ResizeResult {
             instance_id: provider_instance_id.to_string(),
@@ -582,10 +710,15 @@ impl Provider for HetznerProvider {
         let api_reachable = api_resp.is_ok() && api_resp.as_ref().unwrap().status().is_success();
         let api_latency_ms = start.elapsed().as_millis() as u64;
 
-        let health_score = if !api_reachable { 0u8 }
-            else if api_latency_ms < 500 { 95 }
-            else if api_latency_ms < 2000 { 75 }
-            else { 50 };
+        let health_score = if !api_reachable {
+            0u8
+        } else if api_latency_ms < 500 {
+            95
+        } else if api_latency_ms < 2000 {
+            75
+        } else {
+            50
+        };
 
         Ok(ProviderHealth {
             provider: VpsProvider::Hetzner,
@@ -600,8 +733,12 @@ impl Provider for HetznerProvider {
         })
     }
 
-    fn supported_regions(&self) -> Vec<Region> { Self::regions() }
-    fn supports_live_resize(&self) -> bool { false }
+    fn supported_regions(&self) -> Vec<Region> {
+        Self::regions()
+    }
+    fn supports_live_resize(&self) -> bool {
+        false
+    }
 }
 
 // ─── Hetzner API types ───────────────────────────────────────────────────────
@@ -665,7 +802,9 @@ pub struct VultrProvider {
 
 #[async_trait]
 impl Provider for VultrProvider {
-    fn name(&self) -> &str { "vultr" }
+    fn name(&self) -> &str {
+        "vultr"
+    }
 
     async fn provision(&self, req: &ProvisionRequest) -> Result<ProvisionResult> {
         info!(account_id = %req.account_id, "provisioning Vultr instance (stub)");
@@ -674,28 +813,46 @@ impl Provider for VultrProvider {
 
     async fn teardown(&self, provider_instance_id: &str, _account_id: &str) -> Result<()> {
         self.client
-            .delete(format!("https://api.vultr.com/v2/instances/{}", provider_instance_id))
+            .delete(format!(
+                "https://api.vultr.com/v2/instances/{}",
+                provider_instance_id
+            ))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .send().await?.error_for_status()?;
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(())
     }
 
-    async fn resize(&self, _provider_instance_id: &str, _new_tier: &InstanceTier) -> Result<ResizeResult> {
+    async fn resize(
+        &self,
+        _provider_instance_id: &str,
+        _new_tier: &InstanceTier,
+    ) -> Result<ResizeResult> {
         bail!("Vultr resize not yet implemented")
     }
 
     async fn provider_health(&self) -> Result<ProviderHealth> {
         let start = std::time::Instant::now();
-        let ok = self.client
+        let ok = self
+            .client
             .get("https://api.vultr.com/v2/regions")
             .header("Authorization", format!("Bearer {}", self.api_key))
             .timeout(std::time::Duration::from_secs(5))
-            .send().await.is_ok();
+            .send()
+            .await
+            .is_ok();
         let ms = start.elapsed().as_millis() as u64;
         Ok(ProviderHealth {
             provider: VpsProvider::Vultr,
             api_reachable: ok,
-            health_score: if ok && ms < 500 { 90 } else if ok { 70 } else { 0 },
+            health_score: if ok && ms < 500 {
+                90
+            } else if ok {
+                70
+            } else {
+                0
+            },
             provision_avg_ms: 180_000,
             provision_success_rate_7d: 0.97,
             active_incident: false,
@@ -707,12 +864,32 @@ impl Provider for VultrProvider {
 
     fn supported_regions(&self) -> Vec<Region> {
         vec![
-            Region { id: "eu-vultr-ams".to_string(), display_name: "Vultr Amsterdam".to_string(), city: "Amsterdam".to_string(), country: "NL".to_string(), continent: Continent::EU, provider: VpsProvider::Vultr, available: true, latency_class: LatencyClass::Low },
-            Region { id: "us-vultr-ewr".to_string(), display_name: "Vultr New Jersey".to_string(), city: "Newark".to_string(), country: "US".to_string(), continent: Continent::US, provider: VpsProvider::Vultr, available: true, latency_class: LatencyClass::Medium },
+            Region {
+                id: "eu-vultr-ams".to_string(),
+                display_name: "Vultr Amsterdam".to_string(),
+                city: "Amsterdam".to_string(),
+                country: "NL".to_string(),
+                continent: Continent::EU,
+                provider: VpsProvider::Vultr,
+                available: true,
+                latency_class: LatencyClass::Low,
+            },
+            Region {
+                id: "us-vultr-ewr".to_string(),
+                display_name: "Vultr New Jersey".to_string(),
+                city: "Newark".to_string(),
+                country: "US".to_string(),
+                continent: Continent::US,
+                provider: VpsProvider::Vultr,
+                available: true,
+                latency_class: LatencyClass::Medium,
+            },
         ]
     }
 
-    fn supports_live_resize(&self) -> bool { false }
+    fn supports_live_resize(&self) -> bool {
+        false
+    }
 }
 
 // ─── Contabo provider (stub) ──────────────────────────────────────────────────
@@ -724,15 +901,37 @@ pub struct ContaboProvider {
 
 #[async_trait]
 impl Provider for ContaboProvider {
-    fn name(&self) -> &str { "contabo" }
-    async fn provision(&self, _req: &ProvisionRequest) -> Result<ProvisionResult> { bail!("Contabo provisioning not yet implemented") }
-    async fn teardown(&self, _id: &str, _account_id: &str) -> Result<()> { bail!("Contabo teardown not yet implemented") }
-    async fn resize(&self, _id: &str, _tier: &InstanceTier) -> Result<ResizeResult> { bail!("Contabo resize not yet implemented") }
-    async fn provider_health(&self) -> Result<ProviderHealth> {
-        Ok(ProviderHealth { provider: VpsProvider::Contabo, api_reachable: false, health_score: 0, provision_avg_ms: 0, provision_success_rate_7d: 0.0, active_incident: false, incident_description: None, quota_used_pct: 0.0, checked_at: Utc::now() })
+    fn name(&self) -> &str {
+        "contabo"
     }
-    fn supported_regions(&self) -> Vec<Region> { vec![] }
-    fn supports_live_resize(&self) -> bool { false }
+    async fn provision(&self, _req: &ProvisionRequest) -> Result<ProvisionResult> {
+        bail!("Contabo provisioning not yet implemented")
+    }
+    async fn teardown(&self, _id: &str, _account_id: &str) -> Result<()> {
+        bail!("Contabo teardown not yet implemented")
+    }
+    async fn resize(&self, _id: &str, _tier: &InstanceTier) -> Result<ResizeResult> {
+        bail!("Contabo resize not yet implemented")
+    }
+    async fn provider_health(&self) -> Result<ProviderHealth> {
+        Ok(ProviderHealth {
+            provider: VpsProvider::Contabo,
+            api_reachable: false,
+            health_score: 0,
+            provision_avg_ms: 0,
+            provision_success_rate_7d: 0.0,
+            active_incident: false,
+            incident_description: None,
+            quota_used_pct: 0.0,
+            checked_at: Utc::now(),
+        })
+    }
+    fn supported_regions(&self) -> Vec<Region> {
+        vec![]
+    }
+    fn supports_live_resize(&self) -> bool {
+        false
+    }
 }
 
 // ─── Hostinger provider (stub) ────────────────────────────────────────────────
@@ -744,15 +943,37 @@ pub struct HostingerProvider {
 
 #[async_trait]
 impl Provider for HostingerProvider {
-    fn name(&self) -> &str { "hostinger" }
-    async fn provision(&self, _req: &ProvisionRequest) -> Result<ProvisionResult> { bail!("Hostinger provisioning not yet implemented") }
-    async fn teardown(&self, _id: &str, _account_id: &str) -> Result<()> { bail!("Hostinger teardown not yet implemented") }
-    async fn resize(&self, _id: &str, _tier: &InstanceTier) -> Result<ResizeResult> { bail!("Hostinger resize not yet implemented") }
-    async fn provider_health(&self) -> Result<ProviderHealth> {
-        Ok(ProviderHealth { provider: VpsProvider::Hostinger, api_reachable: false, health_score: 0, provision_avg_ms: 0, provision_success_rate_7d: 0.0, active_incident: false, incident_description: None, quota_used_pct: 0.0, checked_at: Utc::now() })
+    fn name(&self) -> &str {
+        "hostinger"
     }
-    fn supported_regions(&self) -> Vec<Region> { vec![] }
-    fn supports_live_resize(&self) -> bool { false }
+    async fn provision(&self, _req: &ProvisionRequest) -> Result<ProvisionResult> {
+        bail!("Hostinger provisioning not yet implemented")
+    }
+    async fn teardown(&self, _id: &str, _account_id: &str) -> Result<()> {
+        bail!("Hostinger teardown not yet implemented")
+    }
+    async fn resize(&self, _id: &str, _tier: &InstanceTier) -> Result<ResizeResult> {
+        bail!("Hostinger resize not yet implemented")
+    }
+    async fn provider_health(&self) -> Result<ProviderHealth> {
+        Ok(ProviderHealth {
+            provider: VpsProvider::Hostinger,
+            api_reachable: false,
+            health_score: 0,
+            provision_avg_ms: 0,
+            provision_success_rate_7d: 0.0,
+            active_incident: false,
+            incident_description: None,
+            quota_used_pct: 0.0,
+            checked_at: Utc::now(),
+        })
+    }
+    fn supported_regions(&self) -> Vec<Region> {
+        vec![]
+    }
+    fn supports_live_resize(&self) -> bool {
+        false
+    }
 }
 
 // ─── DigitalOcean provider (stub) ─────────────────────────────────────────────
@@ -764,15 +985,37 @@ pub struct DigitalOceanProvider {
 
 #[async_trait]
 impl Provider for DigitalOceanProvider {
-    fn name(&self) -> &str { "digitalocean" }
-    async fn provision(&self, _req: &ProvisionRequest) -> Result<ProvisionResult> { bail!("DigitalOcean provisioning not yet implemented") }
-    async fn teardown(&self, _id: &str, _account_id: &str) -> Result<()> { bail!("DigitalOcean teardown not yet implemented") }
-    async fn resize(&self, _id: &str, _tier: &InstanceTier) -> Result<ResizeResult> { bail!("DigitalOcean resize not yet implemented") }
-    async fn provider_health(&self) -> Result<ProviderHealth> {
-        Ok(ProviderHealth { provider: VpsProvider::DigitalOcean, api_reachable: false, health_score: 0, provision_avg_ms: 0, provision_success_rate_7d: 0.0, active_incident: false, incident_description: None, quota_used_pct: 0.0, checked_at: Utc::now() })
+    fn name(&self) -> &str {
+        "digitalocean"
     }
-    fn supported_regions(&self) -> Vec<Region> { vec![] }
-    fn supports_live_resize(&self) -> bool { false }
+    async fn provision(&self, _req: &ProvisionRequest) -> Result<ProvisionResult> {
+        bail!("DigitalOcean provisioning not yet implemented")
+    }
+    async fn teardown(&self, _id: &str, _account_id: &str) -> Result<()> {
+        bail!("DigitalOcean teardown not yet implemented")
+    }
+    async fn resize(&self, _id: &str, _tier: &InstanceTier) -> Result<ResizeResult> {
+        bail!("DigitalOcean resize not yet implemented")
+    }
+    async fn provider_health(&self) -> Result<ProviderHealth> {
+        Ok(ProviderHealth {
+            provider: VpsProvider::DigitalOcean,
+            api_reachable: false,
+            health_score: 0,
+            provision_avg_ms: 0,
+            provision_success_rate_7d: 0.0,
+            active_incident: false,
+            incident_description: None,
+            quota_used_pct: 0.0,
+            checked_at: Utc::now(),
+        })
+    }
+    fn supported_regions(&self) -> Vec<Region> {
+        vec![]
+    }
+    fn supports_live_resize(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

@@ -4,12 +4,12 @@
 //! Forked from clawbernetes/crates/clawnode/src/client.rs — GPU logic removed,
 //! VPS capabilities substituted.
 
-use crate::commands::{handle_command, CommandRequest};
-use crate::identity::{DeviceIdentity, DeviceParams};
 use crate::SharedState;
+use crate::commands::{CommandRequest, handle_command};
+use crate::identity::{DeviceIdentity, DeviceParams};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -318,10 +318,7 @@ impl GatewayClient {
         info!("sending signed connect...");
         debug!("connect frame: {}", connect_frame);
 
-        match write
-            .send(Message::Text(connect_frame.to_string()))
-            .await
-        {
+        match write.send(Message::Text(connect_frame.to_string())).await {
             Ok(_) => info!("sent connect frame successfully"),
             Err(e) => {
                 error!("failed to send connect: {}", e);
@@ -356,10 +353,7 @@ impl GatewayClient {
             let frame: Value = serde_json::from_str(&text)?;
             debug!("received after connect: {}", text);
 
-            let is_hello_ok = frame
-                .get("ok")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
+            let is_hello_ok = frame.get("ok").and_then(|v| v.as_bool()).unwrap_or(false)
                 && frame
                     .get("payload")
                     .and_then(|p| p.get("type"))
@@ -430,10 +424,7 @@ impl GatewayClient {
 
                         if frame.get("id").is_some() {
                             if let Some(_result) = frame.get("result") {
-                                if let Some(token) = _result
-                                    .get("token")
-                                    .and_then(|t| t.as_str())
-                                {
+                                if let Some(token) = _result.get("token").and_then(|t| t.as_str()) {
                                     info!("node paired successfully, token received");
                                     self.state.node_token = Some(token.to_string());
                                 }
@@ -663,4 +654,233 @@ pub async fn send_result(
     );
 
     tx.send(frame).await
+}
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── RequestFrame ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn request_frame_new_sets_frame_type_to_req() {
+        let frame = RequestFrame::new("id-001".to_string(), "connect".to_string(), None);
+        assert_eq!(frame.frame_type, "req");
+        assert_eq!(frame.id, "id-001");
+        assert_eq!(frame.method, "connect");
+        assert!(frame.params.is_none());
+    }
+
+    #[test]
+    fn request_frame_serializes_type_field() {
+        let frame = RequestFrame::new(
+            "id-002".to_string(),
+            "node.pair.request".to_string(),
+            Some(json!({"nodeId": "n-abc"})),
+        );
+        let s = serde_json::to_string(&frame).unwrap();
+        assert!(s.contains(r#""type":"req""#), "missing type field: {s}");
+        assert!(s.contains("node.pair.request"));
+        assert!(s.contains("id-002"));
+        assert!(s.contains("n-abc"));
+    }
+
+    #[test]
+    fn request_frame_omits_params_when_none() {
+        let frame = RequestFrame::new("id-003".to_string(), "ping".to_string(), None);
+        let s = serde_json::to_string(&frame).unwrap();
+        assert!(
+            !s.contains("params"),
+            "params must be omitted when None: {s}"
+        );
+    }
+
+    #[test]
+    fn request_frame_includes_params_when_present() {
+        let frame = RequestFrame::new(
+            "id-004".to_string(),
+            "node.invoke.result".to_string(),
+            Some(json!({"command": "health.check"})),
+        );
+        let s = serde_json::to_string(&frame).unwrap();
+        assert!(s.contains("params"));
+        assert!(s.contains("health.check"));
+    }
+
+    // ── ResponseFrame ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn response_frame_with_result_omits_error_field() {
+        let frame = ResponseFrame {
+            id: "req-001".to_string(),
+            result: Some(json!({"ok": true, "score": 95})),
+            error: None,
+        };
+        let s = serde_json::to_string(&frame).unwrap();
+        assert!(s.contains("req-001"));
+        assert!(s.contains(r#""ok":true"#));
+        assert!(
+            !s.contains(r#""error""#),
+            "error must be omitted when None: {s}"
+        );
+    }
+
+    #[test]
+    fn response_frame_with_error_omits_result_field() {
+        let frame = ResponseFrame {
+            id: "req-002".to_string(),
+            result: None,
+            error: Some(ErrorShape {
+                code: 400,
+                message: "bad request".to_string(),
+                details: None,
+            }),
+        };
+        let s = serde_json::to_string(&frame).unwrap();
+        assert!(s.contains("bad request"));
+        assert!(s.contains("400"));
+        assert!(
+            !s.contains(r#""result""#),
+            "result must be omitted when None: {s}"
+        );
+    }
+
+    // ── EventFrame ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn event_frame_serializes_with_payload() {
+        let frame = EventFrame {
+            event: "node.invoke.request".to_string(),
+            payload: Some(json!({"command": "vps.status", "id": "inv-1"})),
+        };
+        let s = serde_json::to_string(&frame).unwrap();
+        assert!(s.contains("node.invoke.request"));
+        assert!(s.contains("vps.status"));
+    }
+
+    #[test]
+    fn event_frame_omits_payload_when_none() {
+        let frame = EventFrame {
+            event: "tick".to_string(),
+            payload: None,
+        };
+        let s = serde_json::to_string(&frame).unwrap();
+        assert!(s.contains("tick"));
+        assert!(
+            !s.contains("payload"),
+            "payload must be omitted when None: {s}"
+        );
+    }
+
+    // ── ErrorShape ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn error_shape_omits_details_when_none() {
+        let err = ErrorShape {
+            code: 500,
+            message: "internal server error".to_string(),
+            details: None,
+        };
+        let s = serde_json::to_string(&err).unwrap();
+        assert!(s.contains("500"));
+        assert!(s.contains("internal server error"));
+        assert!(
+            !s.contains("details"),
+            "details must be omitted when None: {s}"
+        );
+    }
+
+    #[test]
+    fn error_shape_includes_details_when_present() {
+        let err = ErrorShape {
+            code: 422,
+            message: "validation error".to_string(),
+            details: Some(json!({"field": "name", "reason": "required"})),
+        };
+        let s = serde_json::to_string(&err).unwrap();
+        assert!(s.contains("validation error"));
+        assert!(s.contains("details"));
+        assert!(s.contains("required"));
+    }
+
+    // ── NodeInvokeRequestEvent ────────────────────────────────────────────────
+
+    #[test]
+    fn node_invoke_request_event_deserializes_full() {
+        let raw = r#"{
+            "id": "invoke-001",
+            "nodeId": "node-abc123",
+            "command": "health.check",
+            "paramsJSON": "{\"verbose\":true}",
+            "timeoutMs": 5000,
+            "idempotencyKey": "key-xyz"
+        }"#;
+        let event: NodeInvokeRequestEvent = serde_json::from_str(raw).unwrap();
+        assert_eq!(event.id, "invoke-001");
+        assert_eq!(event.node_id, "node-abc123");
+        assert_eq!(event.command, "health.check");
+        assert_eq!(event.params_json, Some("{\"verbose\":true}".to_string()));
+        assert_eq!(event.timeout_ms, Some(5000));
+        assert_eq!(event.idempotency_key, Some("key-xyz".to_string()));
+    }
+
+    #[test]
+    fn node_invoke_request_event_handles_missing_optionals() {
+        let raw = r#"{
+            "id": "invoke-002",
+            "nodeId": "node-xyz",
+            "command": "vps.info"
+        }"#;
+        let event: NodeInvokeRequestEvent = serde_json::from_str(raw).unwrap();
+        assert_eq!(event.id, "invoke-002");
+        assert_eq!(event.command, "vps.info");
+        assert!(event.params_json.is_none());
+        assert!(event.timeout_ms.is_none());
+        assert!(event.idempotency_key.is_none());
+    }
+
+    // ── ConnectParams / ClientInfo ────────────────────────────────────────────
+
+    #[test]
+    fn connect_params_uses_camel_case_rename() {
+        let params = ConnectParams {
+            min_protocol: 3,
+            max_protocol: 3,
+            client: ClientInfo {
+                id: "node-host".to_string(),
+                display_name: "test-node-01".to_string(),
+                version: "0.1.0".to_string(),
+                platform: "linux x86_64".to_string(),
+                mode: "node".to_string(),
+                instance_id: "inst-abc".to_string(),
+            },
+            caps: vec!["vps".to_string(), "health".to_string()],
+            commands: vec!["vps.info".to_string()],
+            auth: None,
+            device: None,
+            role: Some("node".to_string()),
+            scopes: Some(vec!["node".to_string()]),
+        };
+        let s = serde_json::to_string(&params).unwrap();
+        assert!(s.contains("minProtocol"), "expected minProtocol in: {s}");
+        assert!(s.contains("maxProtocol"), "expected maxProtocol in: {s}");
+        assert!(s.contains("displayName"), "expected displayName in: {s}");
+        assert!(s.contains("instanceId"), "expected instanceId in: {s}");
+        assert!(s.contains("test-node-01"));
+        assert!(s.contains("inst-abc"));
+    }
+
+    #[test]
+    fn invoke_error_serializes_correctly() {
+        let err = InvokeError {
+            code: "COMMAND_ERROR".to_string(),
+            message: "unknown command: bad.cmd".to_string(),
+        };
+        let s = serde_json::to_string(&err).unwrap();
+        assert!(s.contains("COMMAND_ERROR"));
+        assert!(s.contains("unknown command: bad.cmd"));
+    }
 }

@@ -106,51 +106,68 @@ Agent: [CMD] Queuing: 18 tier downsizes, 31 teardowns with archive. ~$449/month 
 
 ---
 
+## Lineage
+
+ClawOps is a fork of **Clawbernetes** (AI-native GPU cluster orchestration, MIT) adapted for GatewayForge VPS fleet management. The fork replaces GPU/container/mesh primitives with VPS, Docker, and Tailscale equivalents. The core OpenClaw gateway protocol, WebSocket node client, and agent architecture are preserved.
+
 ## Workspace Structure
 
 ```
 clawops/
-├── Cargo.toml                    # Rust workspace (7 crates)
+├── Cargo.toml                    # Rust workspace (11 crates, Edition 2024, rust-version 1.93)
 ├── README.md
 ├── .gitignore
 │
-├── gf-clawnode/                  # Instance-side agent binary (VPS-level)
-├── gf-node-proto/                # Protobuf definitions for node protocol
-├── gf-provision/                 # Multi-provider provisioning logic
-├── gf-health/                    # Health check and auto-heal logic
-├── gf-failover/                  # Primary/standby failover orchestration
-├── gf-metrics/                   # Fleet metrics collection + aggregation
-├── gf-audit/                     # Audit trail logging for all agent actions
+├── crates/
+│   ├── clawnode/                 # VPS node agent binary (WebSocket → OpenClaw gateway)
+│   ├── claw-proto/               # Protocol types (HealthReport, InstanceState, VpsProvider, etc.)
+│   ├── claw-persist/             # JSON file-backed key-value persistence (JsonStore)
+│   ├── claw-identity/            # Ed25519 device identity + challenge-response signing
+│   ├── claw-secrets/             # Encrypted secret store with key rotation
+│   ├── claw-auth/                # ApiKeyStore + AuditLogStore (SHA-256 hashed keys)
+│   ├── claw-config/              # ConfigStore with immutable flag support
+│   ├── claw-metrics/             # Push-based metrics store with retention policy
+│   ├── claw-health/              # Health scoring (0–100), auto-heal decisions, failover
+│   ├── claw-provision/           # Multi-provider VPS provisioning (Hetzner, Vultr, etc.)
+│   └── claw-audit/               # Immutable append-only SHA-256 chain audit trail
 │
-├── plugin/                       # TypeScript OpenClaw plugin
-│   └── src/
-│       ├── index.ts              # Plugin entry, registers all tools
-│       ├── tools/                # 12 fleet-level tool implementations
-│       └── services/
-│           └── health-monitor.ts # Background fleet health service
+├── plugin/
+│   └── openclaw-clawops/         # TypeScript OpenClaw plugin (12 tools + health monitor)
+│       ├── src/
+│       │   ├── index.ts          # Plugin entry — createPlugin() factory, tool registration
+│       │   ├── tools/            # 12 fleet-level tool implementations
+│       │   └── services/
+│       │       └── health-monitor.ts  # Background fleet health monitor (5-min poll)
+│       ├── openclaw.plugin.json  # Plugin manifest with safety rules
+│       ├── package.json
+│       └── tsconfig.json
 │
-├── agents/                       # Agent configurations
-│   ├── commander/                # SOUL.md + AGENTS.md
-│   ├── guardian/
-│   ├── forge/
-│   ├── ledger/
-│   ├── triage/
-│   └── briefer/
+├── agents/                       # Agent configurations (SOUL.md + AGENTS.md each)
+│   ├── commander/                # Senior SRE orchestrator — always-on, claude-opus-4-6
+│   ├── guardian/                 # Health watchdog — always-on, claude-sonnet-4-6
+│   ├── forge/                    # Provisioner — ephemeral, claude-sonnet-4-6
+│   ├── ledger/                   # Cost analyst — always-on, claude-sonnet-4-6
+│   ├── triage/                   # Incident responder — ephemeral, claude-opus-4-6
+│   └── briefer/                  # Reporter — cron-triggered, claude-haiku-4-5
 │
-└── skills/                       # Skill files loaded by agents
-    ├── clawops/                  # Master skill for Commander
-    ├── vps-fleet/
-    ├── gateway-manager/
-    ├── auto-heal/
-    ├── instance-diagnose/
-    ├── provision/
-    ├── failover/
-    ├── config-push/
-    ├── cost-analysis/
-    ├── incident-response/
-    ├── provider-health/
-    ├── capacity-planning/
-    └── security-audit/
+├── skills/                       # Skill files (SKILL.md each, loaded by agents)
+│   ├── clawops/                  # Master skill — full plugin tool reference table
+│   ├── vps-fleet/                # Fleet topology, instance states, health thresholds
+│   ├── gateway-manager/          # OpenClaw lifecycle + config push process
+│   ├── auto-heal/                # 6-step heal decision tree with plugin tool calls
+│   ├── instance-diagnose/        # Diagnostic sequences for common failures
+│   ├── provision/                # Provisioning workflows with exact tool call sequences
+│   ├── failover/                 # Failover orchestration with standby verification
+│   ├── config-push/              # Config deployment with rolling validation
+│   ├── cost-analysis/            # Cost framework + waste identification
+│   ├── incident-response/        # Incident management playbooks
+│   ├── provider-health/          # Provider status monitoring
+│   ├── capacity-planning/        # Growth projections and headroom
+│   └── security-audit/           # Security constraints and audit requirements
+│
+└── .github/
+    └── workflows/
+        └── ci.yml                # CI: Rust (stable+nightly) + TypeScript type check
 ```
 
 ---
@@ -174,21 +191,36 @@ cargo build --workspace
 ### Build Plugin
 
 ```bash
-cd plugin
+cd plugin/openclaw-clawops
 npm install
 npm run build
+# Type check only (no output):
+npx tsc --noEmit
 ```
 
-### Deploy gf-clawnode to a VPS
+### Deploy clawnode to a VPS
 
 ```bash
-# Copy binary to VPS, then:
-export INSTANCE_ID="<uuid>"
-export GATEWAY_URL="https://<tailscale-hostname>:8443"
-export GF_API_KEY="<service-key>"
-export NODE_REGION="eu-hetzner-nbg1"
-export NODE_TIER="standard"
-./gf-clawnode
+# Build the release binary first:
+cargo build --release --package clawnode
+
+# Copy binary to VPS, configure with a JSON config file:
+cat > /etc/clawnode/config.json << 'EOF'
+{
+  "gateway": "wss://gateway.example.com",
+  "token": "<gateway-api-token>",
+  "hostname": "vps-acct-001-primary",
+  "provider": "hetzner",
+  "region": "eu-hetzner-nbg1",
+  "tier": "standard",
+  "role": "primary",
+  "account_id": "acct-001",
+  "state_path": "/var/lib/clawnode"
+}
+EOF
+
+# Run the agent:
+clawnode run --config /etc/clawnode/config.json
 ```
 
 ### Configure Agents

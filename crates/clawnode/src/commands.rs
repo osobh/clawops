@@ -26,9 +26,7 @@ pub async fn handle_command(
 
     match request.command.as_str() {
         // ── System / VPS core ──────────────────────────────────────────────
-        "system.info" | "vps.info" => {
-            crate::vps_cmd::handle_vps_info(state).await
-        }
+        "system.info" | "vps.info" => crate::vps_cmd::handle_vps_info(state).await,
         "vps.status" => crate::vps_cmd::handle_vps_status(state).await,
         "vps.metrics" => crate::vps_cmd::handle_vps_metrics(state).await,
         "vps.restart" => crate::vps_cmd::handle_vps_restart(state).await,

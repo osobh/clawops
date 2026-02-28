@@ -1,5 +1,24 @@
 # Security Audit Skill
 
+## Plugin Tools Used
+
+| Tool | When |
+|------|------|
+| `gf_audit_log({ limit: 200 })` | Primary security review tool |
+| `gf_audit_log({ action: "teardown" })` | Verify all teardowns were authorized |
+| `gf_audit_log({ action: "provision" })` | Review provision authorization chain |
+| `gf_fleet_status({})` | Identify unpaired or orphaned instances |
+
+### Security Audit Sequence
+
+```
+1. gf_audit_log({ from: periodStart, limit: 200 }) → review all actions
+2. Flag any teardown without prior audit record (safety rule violation)
+3. Flag any config push > 100 instances without rolling validation record
+4. gf_fleet_status({}) → identify unpaired/orphaned instances (security risk)
+5. Cross-reference provision actions with operator confirmation records
+```
+
 ## Security Philosophy
 
 The ClawOps agent team operates with minimum necessary permissions. Each agent can only take the actions explicitly authorized in its SOUL.md and AGENTS.md. These are not suggestions — they are hard constraints the agent will not cross regardless of operator instruction.

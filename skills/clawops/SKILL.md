@@ -1,5 +1,22 @@
 # ClawOps Master Skill
 
+## All Plugin Tools (Quick Reference)
+
+| Tool | Category | Primary User |
+|------|----------|-------------|
+| `gf_fleet_status` | Fleet | Commander, Guardian |
+| `gf_instance_health` | Health | Guardian, Triage |
+| `gf_provision` | Provisioning | Forge |
+| `gf_teardown` | Provisioning | Forge (STANDBY ONLY) |
+| `gf_tier_resize` | Provisioning | Commander (with confirm) |
+| `gf_config_push` | Configuration | Commander |
+| `gf_cost_report` | Cost | Ledger |
+| `gf_provider_health` | Health | All agents |
+| `gf_audit_log` | Audit | All agents |
+| `gf_pair_status` | Fleet | Guardian, Forge, Triage |
+| `gf_bulk_restart` | Fleet | Guardian |
+| `gf_incident_report` | Incidents | Triage, Commander |
+
 This is the architecture overview for Commander. Read this skill at the start of every session.
 
 ## What ClawOps Is
