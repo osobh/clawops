@@ -1,0 +1,18 @@
+{
+  "gateway": "ws://100.123.224.84:18789",
+  "token": "20696d06db2e9dd52a3803e92c5dd7443d8d669d31f62e40",
+  "hostname": "gw-01",
+  "provider": "hetzner",
+  "region": "eu-hetzner",
+  "tier": "standard",
+  "role": "primary",
+  "account_id": "redclaw-infra",
+  "state_path": "/var/lib/clawnode",
+  "heartbeat_interval_secs": 30,
+  "reconnect_delay_secs": 5,
+  "labels": {
+    "ip": "65.108.148.166",
+    "tailscale": "100.100.114.42",
+    "services": "rustyweights,clawbnb,kitchencash"
+  }
+}

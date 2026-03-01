@@ -1,0 +1,18 @@
+{
+  "gateway": "ws://100.123.224.84:18789",
+  "token": "20696d06db2e9dd52a3803e92c5dd7443d8d669d31f62e40",
+  "hostname": "oracle",
+  "provider": "oracle-cloud",
+  "region": "us-ashburn",
+  "tier": "enterprise",
+  "role": "primary",
+  "account_id": "redclaw-infra",
+  "state_path": "/var/lib/clawnode",
+  "heartbeat_interval_secs": 30,
+  "reconnect_delay_secs": 5,
+  "labels": {
+    "cpu": "xeon-e5-2697-v2-48c",
+    "ram": "247gb",
+    "purpose": "benchmarks,compute"
+  }
+}

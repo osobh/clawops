@@ -12,6 +12,15 @@ use sysinfo::System;
 
 // ─── Build a HealthReport from live system state ──────────────────────────────
 
+/// Check if a command exists in PATH.
+fn which_exists(cmd: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 async fn gather_health_report(state: &SharedState) -> HealthReport {
     let s = state.read().await;
 
@@ -56,22 +65,44 @@ async fn gather_health_report(state: &SharedState) -> HealthReport {
         (s + n.transmitted(), r + n.received())
     });
 
-    let docker_running = std::process::Command::new("docker")
-        .args(["info"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    // Docker: only check if CLI exists (skip on macOS without Docker Desktop)
+    let docker_running = which_exists("docker")
+        && std::process::Command::new("docker")
+            .args(["info"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
 
-    let tailscale_connected = std::process::Command::new("tailscale")
-        .args(["status"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    // Tailscale: try CLI first, fall back to process/path detection (macOS)
+    let tailscale_connected = if which_exists("tailscale") {
+        std::process::Command::new("tailscale")
+            .args(["status"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    } else {
+        sys.processes().values().any(|p| {
+            let name = p.name().to_string_lossy();
+            name.contains("tailscaled") || name.contains("Tailscale")
+        }) || std::path::Path::new("/Library/Tailscale").exists()
+    };
 
-    let openclaw_status = if docker_running {
+    // OpenClaw: check for process or port 18789 listener
+    let openclaw_running = sys.processes().values().any(|p| {
+        let name = p.name().to_string_lossy();
+        let cmd_str = p.cmd().iter()
+            .map(|s| s.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" ");
+        name.contains("openclaw")
+            || cmd_str.contains("openclaw")
+            || cmd_str.contains("18789")
+    });
+
+    let openclaw_status = if openclaw_running {
         ServiceStatus::Healthy
     } else {
-        ServiceStatus::Degraded
+        ServiceStatus::Down
     };
 
     let tier = match s.config.tier.as_str() {
@@ -105,7 +136,7 @@ async fn gather_health_report(state: &SharedState) -> HealthReport {
         health_score: 0,
         openclaw_status,
         openclaw_http_status: None,
-        docker_running,
+        docker_running: docker_running || !which_exists("docker"), // not penalize if docker N/A
         tailscale_connected,
         tailscale_latency_ms: None,
         cpu_usage_1m: cpu_usage,
@@ -151,6 +182,7 @@ pub async fn handle_health_check(state: &SharedState) -> Result<Value, CommandEr
         "mem_usage_pct": report.mem_usage_pct,
         "disk_usage_pct": report.disk_usage_pct,
         "docker_running": report.docker_running,
+        "openclaw_running": report.openclaw_status == claw_proto::ServiceStatus::Healthy,
         "tailscale_connected": report.tailscale_connected,
         "uptime_secs": report.uptime_secs,
         "recommended_action": format!("{:?}", action),
