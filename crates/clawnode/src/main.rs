@@ -4,6 +4,7 @@
 //! fleet management commands: health, metrics, docker, config, secrets.
 
 use clap::{Parser, Subcommand};
+mod hetzner_cmd;
 use clawnode::{GatewayClient, config::NodeConfig, create_state};
 use std::path::PathBuf;
 use tracing::{error, info};
@@ -71,6 +72,73 @@ enum Commands {
         #[arg(long, default_value = "{}")]
         params: String,
     },
+
+    /// Hetzner Cloud API commands
+    #[command(subcommand)]
+    Hetzner(HetznerCommands),
+}
+
+#[derive(Subcommand)]
+enum HetznerCommands {
+    /// List all servers
+    List,
+    /// Get server details
+    Get {
+        /// Server ID or name
+        server: String,
+    },
+    /// Server metrics (last hour)
+    Metrics {
+        /// Server ID or name
+        server: String,
+    },
+    /// Create a new server
+    Create {
+        /// Server name
+        #[arg(long)]
+        name: String,
+        /// Server type (e.g. cx22, cpx32)
+        #[arg(long, default_value = "cpx32")]
+        server_type: String,
+        /// Location (nbg1, hel1, fsn1, ash)
+        #[arg(long, default_value = "hel1")]
+        location: String,
+        /// OS image
+        #[arg(long, default_value = "ubuntu-24.04")]
+        image: String,
+    },
+    /// Delete a server (⚠️ destructive)
+    Delete {
+        /// Server ID or name
+        server: String,
+    },
+    /// Reboot a server
+    Reboot {
+        /// Server ID or name
+        server: String,
+    },
+    /// Power on a server
+    Poweron {
+        /// Server ID or name
+        server: String,
+    },
+    /// Power off a server
+    Poweroff {
+        /// Server ID or name
+        server: String,
+    },
+    /// Resize a server
+    Resize {
+        /// Server ID or name
+        server: String,
+        /// New server type (e.g. cx22, cpx32, cpx42)
+        #[arg(long)]
+        server_type: String,
+    },
+    /// List available server types
+    Types,
+    /// List SSH keys
+    SshKeys,
 }
 
 #[tokio::main]
@@ -78,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Suppress tracing for exec commands to keep stdout clean JSON
-    if !matches!(cli.command, Commands::Exec { .. }) {
+    if !matches!(cli.command, Commands::Exec { .. } | Commands::Hetzner(_)) {
         tracing_subscriber::registry()
             .with(fmt::layer())
             .with(EnvFilter::from_default_env().add_directive("clawnode=info".parse()?))
@@ -105,8 +173,39 @@ async fn main() -> anyhow::Result<()> {
         Commands::Exec { command, params } => {
             exec_command(&command, &params).await?;
         }
+        Commands::Hetzner(cmd) => {
+            handle_hetzner(cmd).await?;
+        }
     }
 
+    Ok(())
+}
+
+// ─── Hetzner ──────────────────────────────────────────────────────────────────
+
+async fn handle_hetzner(cmd: HetznerCommands) -> anyhow::Result<()> {
+    let client = hetzner_cmd::HetznerClient::from_config()?;
+
+    let result = match cmd {
+        HetznerCommands::List => client.list_servers().await?,
+        HetznerCommands::Get { server } => {
+            let s = client.get_server(&server).await?;
+            serde_json::json!({ "ok": true, "server": s })
+        }
+        HetznerCommands::Metrics { server } => client.server_metrics(&server).await?,
+        HetznerCommands::Create { name, server_type, location, image } => {
+            client.create_server(&name, &server_type, &location, &image, &[], &std::collections::HashMap::new()).await?
+        }
+        HetznerCommands::Delete { server } => client.delete_server(&server).await?,
+        HetznerCommands::Reboot { server } => client.reboot_server(&server).await?,
+        HetznerCommands::Poweron { server } => client.power_action(&server, "poweron").await?,
+        HetznerCommands::Poweroff { server } => client.power_action(&server, "poweroff").await?,
+        HetznerCommands::Resize { server, server_type } => client.resize_server(&server, &server_type).await?,
+        HetznerCommands::Types => client.list_server_types().await?,
+        HetznerCommands::SshKeys => client.list_ssh_keys().await?,
+    };
+
+    println!("{}", serde_json::to_string_pretty(&result)?);
     Ok(())
 }
 
