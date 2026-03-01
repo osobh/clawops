@@ -99,7 +99,12 @@ async fn gather_health_report(state: &SharedState) -> HealthReport {
             || cmd_str.contains("18789")
     });
 
-    let openclaw_status = if openclaw_running {
+    // Only flag OpenClaw as down if this node is expected to run it
+    let expects_openclaw = s.config.labels.get("services")
+        .map(|s| s.contains("openclaw"))
+        .unwrap_or(false);
+
+    let openclaw_status = if openclaw_running || !expects_openclaw {
         ServiceStatus::Healthy
     } else {
         ServiceStatus::Down
